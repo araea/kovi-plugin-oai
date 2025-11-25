@@ -216,16 +216,7 @@ mod utils {
     pub static RE_IDX: OnceLock<Regex> = OnceLock::new();
 
     pub const MODEL_KEYWORDS: &[&str] = &[
-        "gpt",
-        "claude",
-        "gemini",
-        "qwen",
-        "doubao",
-        "glm",
-        "deepseek",
-        "midjourney",
-        "mj",
-        "kimi",
+        "gpt", "claude", "gemini", "deepseek", "kimi", "qwen3", "grok-4"
     ];
 
     /// 全角转半角
@@ -1436,8 +1427,9 @@ mod logic {
                     event.reply("📋 暂无智能体，使用 #名称 模型 提示词 创建");
                     return;
                 }
-                let list = c
-                    .agents
+                let mut sorted_agents = c.agents.clone();
+                sorted_agents.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+                let list = sorted_agents
                     .iter()
                     .enumerate()
                     .map(|(i, a)| {
