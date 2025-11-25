@@ -9,6 +9,36 @@
 //! 对象符: @ 智能体 | $ 提示词 | % 模型 | : 描述
 //! 范围符: * 全部 | 数字索引
 
+// [package]
+// name = "kovi-plugin-oai"
+// version = "0.1.1"
+// edition = "2024"
+// license = "MIT OR Apache-2.0"
+// authors = ["Nawyjx <3373167460@qq.com>"]
+// description = "Kovi 的 OpenAI 兼容 API 聊天插件，支持多智能体管理与符号指令系统。"
+// categories = ["web-programming::http-client", "asynchronous"]
+// repository = "https://github.com/araea/kovi-plugin-oai"
+// keywords = ["kovi", "kovi-plugin", "openai", "chatgpt", "ai-chat"]
+
+// [dependencies]
+// kovi = ">= 0.12"
+// regex = "1"
+// rand = "0.9"
+// anyhow = "1.0"
+// base64 = "0.22"
+// serde_json = "1.0"
+// cdp-html-shot = "0.2"
+// async-openai = "0.30"
+// pulldown-cmark = "0.13"
+// kovi-plugin-expand-napcat = "0.4"
+// serde = { version = "1.0", features = ["derive"] }
+// tokio = { version = "1", features = ["full"] }
+// chrono = { version = "0.4", features = ["serde"] }
+// reqwest = { version = "0.12", features = ["json"] }
+
+// [package.metadata.docs.rs]
+// targets = ["x86_64-unknown-linux-gnu"]
+
 // --- 类型定义 ---
 mod types {
     use serde::{Deserialize, Serialize};
@@ -175,7 +205,7 @@ mod types {
 
 // --- 工具函数 ---
 mod utils {
-    use cdp_html_shot::Browser;
+    use cdp_html_shot::{Browser, CaptureOptions, Viewport};
     use kovi::bot::message::Message;
     use kovi::tokio::time::{self, Duration};
     use pulldown_cmark::{Options, Parser, html};
@@ -298,43 +328,77 @@ mod utils {
         html::push_html(&mut html_body, parser);
 
         let css = r#"
-*{box-sizing:border-box}
-body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",Helvetica,Arial,sans-serif;font-size:15px;line-height:1.6;background:#f5f5f5;color:#333;padding:0;margin:0}
-.md{background:#fff;padding:16px 14px;margin:0;max-width:480px;width:90vw;word-wrap:break-word;overflow-wrap:break-word}
-.title{font-size:13px;color:#888;border-bottom:1px solid #eee;padding-bottom:10px;margin-bottom:14px;font-weight:500}
-h1,h2,h3{margin:16px 0 10px;font-weight:600;line-height:1.4}
-h1{font-size:20px;border-bottom:2px solid #eee;padding-bottom:8px}
-h2{font-size:18px;border-bottom:1px solid #eee;padding-bottom:6px}
-h3{font-size:16px}
-p{margin:10px 0}
-table{border-collapse:collapse;margin:12px 0;width:100%;font-size:13px;display:block;overflow-x:auto}
-td,th{padding:8px 10px;border:1px solid #ddd;text-align:left}
-th{font-weight:600;background:#f8f9fa}
-tr:nth-child(2n){background:#fafafa}
-code{padding:2px 6px;background:#f0f0f0;border-radius:4px;font-family:"SF Mono",Consolas,"Liberation Mono",Menlo,monospace;font-size:13px;color:#d63384}
-pre{background:#f6f8fa;border-radius:8px;padding:12px;overflow-x:auto;margin:12px 0}
-pre code{background:none;padding:0;color:#333}
-blockquote{margin:12px 0;padding:8px 12px;color:#666;border-left:3px solid #ddd;background:#fafafa;border-radius:0 4px 4px 0}
-img{max-width:100%;height:auto;border-radius:6px;margin:8px 0}
-ul,ol{padding-left:20px;margin:10px 0}
-li{margin:4px 0}
-hr{border:none;border-top:1px solid #eee;margin:16px 0}
-a{color:#0066cc;text-decoration:none}
-strong{font-weight:600}
-.agent-card{background:#fafbfc;border:1px solid #e8e8e8;border-radius:8px;padding:12px;margin:10px 0}
-.agent-name{font-size:16px;font-weight:600;color:#333;margin-bottom:8px}
-.agent-info{font-size:13px;color:#666;line-height:1.8}
-.agent-info code{font-size:12px}
-"#;
+ *{box-sizing:border-box}
+ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",Helvetica,Arial,sans-serif;font-size:15px;line-height:1.6;background:#f5f5f5;color:#333;padding:0;margin:0}
+ .md{background:#fff;padding:16px 14px;margin:0;max-width:480px;width:90vw;word-wrap:break-word;overflow-wrap:break-word}
+ .title{font-size:13px;color:#888;border-bottom:1px solid #eee;padding-bottom:10px;margin-bottom:14px;font-weight:500}
+ h1,h2,h3{margin:16px 0 10px;font-weight:600;line-height:1.4}
+ h1{font-size:20px;border-bottom:2px solid #eee;padding-bottom:8px}
+ h2{font-size:18px;border-bottom:1px solid #eee;padding-bottom:6px}
+ h3{font-size:16px}
+ p{margin:10px 0}
+ table{border-collapse:collapse;margin:12px 0;width:100%;font-size:13px;display:block;overflow-x:auto}
+ td,th{padding:8px 10px;border:1px solid #ddd;text-align:left}
+ th{font-weight:600;background:#f8f9fa}
+ tr:nth-child(2n){background:#fafafa}
+ code{padding:2px 6px;background:#f0f0f0;border-radius:4px;font-family:"SF Mono",Consolas,"Liberation Mono",Menlo,monospace;font-size:13px;color:#d63384}
+ pre{background:#f6f8fa;border-radius:8px;padding:12px;overflow-x:auto;margin:12px 0}
+ pre code{background:none;padding:0;color:#333}
+ blockquote{margin:12px 0;padding:8px 12px;color:#666;border-left:3px solid #ddd;background:#fafafa;border-radius:0 4px 4px 0}
+ img{max-width:100%;height:auto;border-radius:6px;margin:8px 0}
+ ul,ol{padding-left:20px;margin:10px 0}
+ li{margin:4px 0}
+ hr{border:none;border-top:1px solid #eee;margin:16px 0}
+ a{color:#0066cc;text-decoration:none}
+ strong{font-weight:600}
+ .agent-card{background:#fafbfc;border:1px solid #e8e8e8;border-radius:8px;padding:12px;margin:10px 0}
+ .agent-name{font-size:16px;font-weight:600;color:#333;margin-bottom:8px}
+ .agent-info{font-size:13px;color:#666;line-height:1.8}
+ .agent-info code{font-size:12px}
+ "#;
         let html = format!(
             r#"<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>{css}</style></head><body><div class="md"><div class="title">{title}</div>{html_body}</div></body></html>"#
         );
 
         let browser = Browser::instance().await;
         let tab = browser.new_tab().await?;
+
+        // 1. 设置初始视口
+        // 宽度 600 以适应 .md max-width: 480px 的卡片设计
+        // device_scale_factor: 2.0 提升截图清晰度
+        let width = 600;
+        tab.set_viewport(&Viewport::new(width, 100).with_device_scale_factor(2.0))
+            .await?;
+
         tab.set_content(&html).await?;
-        time::sleep(Duration::from_millis(300)).await;
-        let b64 = tab.find_element(".md").await?.screenshot().await?;
+
+        // 等待渲染
+        time::sleep(Duration::from_millis(200)).await;
+
+        // 2. 获取实际内容高度并调整视口
+        // 修复长截图时底部出现大片空白的 Bug (Chromium Issue)
+        let height_js = "document.body.scrollHeight";
+        let body_height = tab.evaluate(height_js).await?.as_f64().unwrap_or(800.0) as u32;
+
+        // 设置新的视口高度以容纳所有内容
+        let viewport = Viewport::new(width, body_height + 100).with_device_scale_factor(2.0);
+        tab.set_viewport(&viewport).await?;
+
+        // 等待 Resize 生效
+        time::sleep(Duration::from_millis(100)).await;
+
+        // 3. 截图
+        // 显式传入 viewport 确保 screenshot 方法使用了正确的尺寸
+        let opts = CaptureOptions::new()
+            .with_viewport(viewport)
+            .with_quality(90);
+
+        let b64 = tab
+            .find_element(".md")
+            .await?
+            .screenshot_with_options(opts)
+            .await?;
+
         let _ = tab.close().await;
         Ok(b64)
     }
