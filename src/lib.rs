@@ -799,7 +799,12 @@ mod parser {
             && !s.starts_with(":/")
             && !s.starts_with("：/")
         {
-            let arg = r.get(1..).unwrap_or("").trim();
+            let skip_len = if r.starts_with('：') {
+                '：'.len_utf8() // 3 bytes for Chinese full-width colon
+            } else {
+                ':'.len_utf8() // 1 byte for ASCII colon
+            };
+            let arg = r.get(skip_len..).unwrap_or("").trim();
             return (Action::SetDesc, arg.to_string(), vec![]);
         }
 
