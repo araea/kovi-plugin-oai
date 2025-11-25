@@ -1,0 +1,29 @@
+[package]
+name = "kovi-plugin-oai"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+authors = ["Nawyjx <3373167460@qq.com>"]
+description = "Kovi 的 OpenAI 兼容 API 聊天插件，支持多智能体管理与符号指令系统。"
+categories = ["web-programming::http-client", "asynchronous"]
+repository = "https://github.com/araea/kovi-plugin-oai"
+keywords = ["kovi", "kovi-plugin", "openai", "chatgpt", "ai-chat"]
+
+[dependencies]
+kovi = ">= 0.12"
+regex = "1"
+rand = "0.9"
+anyhow = "1.0"
+base64 = "0.22"
+serde_json = "1.0"
+cdp-html-shot = "0.1"
+async-openai = "0.30"
+pulldown-cmark = "0.13"
+kovi-plugin-expand-napcat = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+tokio = { version = "1", features = ["full"] }
+chrono = { version = "0.4", features = ["serde"] }
+reqwest = { version = "0.12", features = ["json"] }
+
+[package.metadata.docs.rs]
+targets = ["x86_64-unknown-linux-gnu"]
