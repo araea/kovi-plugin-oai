@@ -164,12 +164,10 @@ mod types {
                 } else {
                     set.remove(uid);
                 }
+            } else if generating {
+                self.public.insert(agent.to_string());
             } else {
-                if generating {
-                    self.public.insert(agent.to_string());
-                } else {
-                    self.public.remove(agent);
-                }
+                self.public.remove(agent);
             }
         }
     }
@@ -486,7 +484,7 @@ strong{font-weight:600}
             content.push_str(&format!("【#{} {} | {}】\n", i + 1, role_name, time));
             content.push_str(&format!("{}\n", thin_sep));
             content.push_str(&m.content);
-            content.push_str("\n");
+            content.push('\n');
 
             if !m.images.is_empty() {
                 content.push_str(&format!("\n📷 附图 ({} 张):\n", m.images.len()));
@@ -1193,12 +1191,19 @@ mod logic {
                             content.clone()
                         };
 
-                        reply(ctx.event, &display_content, ctx.cmd.text_mode, &header).await;
-
                         if ctx.cmd.text_mode && !image_urls.is_empty() {
+                            let urls_text = image_urls
+                                .iter()
+                                .map(|u| u.to_string())
+                                .collect::<Vec<_>>()
+                                .join("\n\n");
+                            let text_with_urls = format!("{}\n\n{}", content, urls_text);
+                            reply(ctx.event, &text_with_urls, true, &header).await;
                             for url in &image_urls {
                                 ctx.event.reply(Message::new().add_image(url));
                             }
+                        } else {
+                            reply(ctx.event, &display_content, ctx.cmd.text_mode, &header).await;
                         }
                     }
                 }
