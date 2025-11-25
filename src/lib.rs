@@ -215,9 +215,8 @@ mod utils {
     pub static RE_API: OnceLock<Regex> = OnceLock::new();
     pub static RE_IDX: OnceLock<Regex> = OnceLock::new();
 
-    pub const MODEL_KEYWORDS: &[&str] = &[
-        "gpt", "claude", "gemini", "deepseek", "kimi", "qwen3", "grok-4"
-    ];
+    pub const MODEL_KEYWORDS: &[&str] =
+        &["gpt-5", "claude", "gemini-3", "deepseek", "kimi", "grok-4"];
 
     /// 全角转半角
     pub fn normalize(s: &str) -> String {
@@ -796,7 +795,10 @@ mod parser {
             return (Action::Copy, arg.to_string(), vec![]);
         }
 
-        if s.starts_with(':') && !s.starts_with(":/") {
+        if (s.starts_with(':') || s.starts_with('：'))
+            && !s.starts_with(":/")
+            && !s.starts_with("：/")
+        {
             let arg = r.get(1..).unwrap_or("").trim();
             return (Action::SetDesc, arg.to_string(), vec![]);
         }
@@ -871,7 +873,8 @@ mod parser {
 // --- 数据管理 ---
 mod data {
     use super::types::{Config, GeneratingState};
-    use kovi::serde_json::Value;
+    use async_openai::Client;
+    use async_openai::config::OpenAIConfig;
     use kovi::tokio::sync::RwLock;
     use kovi::utils::{load_json_data, save_json_data};
     use std::path::PathBuf;
@@ -907,31 +910,20 @@ mod data {
                 let c = self.config.read().await;
                 (c.api_base.clone(), c.api_key.clone())
             };
+
             if base.is_empty() {
                 return Err(anyhow::anyhow!("API未配置"));
             }
 
-            let client = reqwest::Client::new();
-            let url = format!("{}/models", base.trim_end_matches('/'));
-            let res = client
-                .get(&url)
-                .header("Authorization", format!("Bearer {}", key))
-                .send()
-                .await?;
+            let config = OpenAIConfig::new().with_api_base(base).with_api_key(key);
 
-            if !res.status().is_success() {
-                return Err(anyhow::anyhow!("HTTP {}", res.status()));
-            }
+            let client = Client::with_config(config);
 
-            let json: Value = res.json().await?;
-            let mut models = Vec::new();
-            if let Some(data) = json["data"].as_array() {
-                for item in data {
-                    if let Some(id) = item["id"].as_str() {
-                        models.push(id.to_string());
-                    }
-                }
-            }
+            let response = client.models().list().await?;
+
+            // 提取模型 ID 并排序
+            let mut models: Vec<String> = response.data.into_iter().map(|m| m.id).collect();
+
             models.sort();
 
             let filtered = super::utils::filter_models(&models);
