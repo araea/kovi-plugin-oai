@@ -301,8 +301,8 @@ mod utils {
  td,th{padding:8px 10px;border:1px solid #ddd;text-align:left}
  th{font-weight:600;background:#f8f9fa}
  tr:nth-child(2n){background:#fafafa}
- code{padding:2px 6px;background:#f0f0f0;border-radius:4px;font-family:"SF Mono",Consolas,"Liberation Mono",Menlo,monospace;font-size:13px;color:#d63384}
- pre{background:#f6f8fa;border-radius:8px;padding:12px;overflow-x:auto;margin:12px 0}
+ code{padding:2px 6px;background:#f0f0f0;border-radius:4px;font-family:"SF Mono",Consolas,"Liberation Mono",Menlo,monospace;font-size:13px;color:#d63384;white-space:pre-wrap;word-wrap:break-word;}
+ pre{background:#f6f8fa;border-radius:8px;padding:12px;overflow-x:auto;margin:12px 0;white-space:pre-wrap;word-wrap:break-word;overflow-wrap: break-word;}
  pre code{background:none;padding:0;color:#333}
  blockquote{margin:12px 0;padding:8px 12px;color:#666;border-left:3px solid #ddd;background:#fafafa;border-radius:0 4px 4px 0}
  img{max-width:100%;height:auto;border-radius:6px;margin:8px 0}
