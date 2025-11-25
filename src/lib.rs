@@ -95,7 +95,6 @@ mod types {
             }
         }
 
-        // 需求2: 多索引删除，降序排序防止索引变化
         pub fn delete_at(&mut self, private: bool, uid: &str, indices: &[usize]) -> Vec<usize> {
             let h = self.history_mut(private, uid);
             let mut deleted = Vec::new();
@@ -280,7 +279,6 @@ mod utils {
             .collect()
     }
 
-    // 需求5: 转义 Markdown 特殊字符，使用 serde_json
     pub fn escape_markdown_special(s: &str) -> String {
         // 使用 serde_json 转义特殊字符，然后去掉首尾引号
         match kovi::serde_json::to_string(s) {
@@ -293,7 +291,6 @@ mod utils {
         }
     }
 
-    /// 渲染 Markdown 为图片 - 需求3: 优化手机阅读体验
     pub async fn render_md(md: &str, title: &str) -> anyhow::Result<String> {
         let mut opts = Options::empty();
         opts.insert(Options::ENABLE_STRIKETHROUGH);
@@ -302,7 +299,6 @@ mod utils {
         let mut html_body = String::new();
         html::push_html(&mut html_body, parser);
 
-        // 需求3: 优化手机阅读体验的CSS，调整.md 最大宽度限制以适配不同屏幕
         let css = r#"
 *{box-sizing:border-box}
 body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",Helvetica,Arial,sans-serif;font-size:15px;line-height:1.6;background:#f5f5f5;color:#333;padding:0;margin:0}
@@ -340,7 +336,6 @@ strong{font-weight:600}
         let tab = browser.new_tab().await?;
         tab.set_content(&html).await?;
         time::sleep(Duration::from_millis(300)).await;
-        // 需求3: 截取 .md 元素而不是 body，避免两边大量空白
         let b64 = tab.find_element(".md").await?.screenshot().await?;
         let _ = tab.close().await;
         Ok(b64)
@@ -447,7 +442,6 @@ strong{font-weight:600}
         }
     }
 
-    // 需求1: 格式化导出文本
     pub fn format_export_txt(
         agent_name: &str,
         model: &str,
@@ -809,7 +803,6 @@ mod parser {
             return (Action::ClearHistory(scope), String::new(), vec![]);
         }
 
-        // 需求2: 支持删除多条记录 (如 -1,3,5 或 -1-5)
         if clean.starts_with('-') && clean.len() > 1 {
             let idx_part = &clean[1..];
             let indices = super::utils::parse_indices(idx_part);
@@ -1178,7 +1171,6 @@ mod logic {
 
                         let image_urls = extract_image_urls(content);
 
-                        // 需求4: 私有回复也发在群组里，不需要私聊
                         let header = format!(
                             "{} #{}回复{}",
                             agent.name,
@@ -1203,7 +1195,6 @@ mod logic {
 
                         reply(ctx.event, &display_content, ctx.cmd.text_mode, &header).await;
 
-                        // 需求7: 文本模式下图片预览
                         if ctx.cmd.text_mode && !image_urls.is_empty() {
                             for url in &image_urls {
                                 ctx.event.reply(Message::new().add_image(url));
@@ -1346,14 +1337,12 @@ mod logic {
                 }
             }
 
-            // 需求5: 转义系统提示词中的特殊字符
             Action::ViewPrompt => {
                 let c = mgr.config.read().await;
                 if let Some(a) = c.agents.iter().find(|a| a.name == *name) {
                     let prompt_display = if a.system_prompt.is_empty() {
                         "(空)".to_string()
                     } else {
-                        // 需求5: 使用转义函数处理特殊字符
                         escape_markdown_special(&a.system_prompt)
                     };
                     let content = format!(
@@ -1372,7 +1361,6 @@ mod logic {
                 }
             }
 
-            // 需求6: 优化智能体列表排版
             Action::List => {
                 let c = mgr.config.read().await;
                 if c.agents.is_empty() {
@@ -1394,7 +1382,6 @@ mod logic {
                         } else {
                             truncate_str(&a.system_prompt, 40)
                         };
-                        // 需求6: 卡片式布局，更适合手机阅读
                         format!(
                             "<div class=\"agent-card\">\n<div class=\"agent-name\">{}. {}</div>\n<div class=\"agent-info\">\n📦 <code>{}</code><br>\n📝 {}<br>\n💬 {}\n</div>\n</div>",
                             i + 1,
@@ -1527,7 +1514,6 @@ mod logic {
                 }
             }
 
-            // 需求1: 导出格式改为 .txt，整洁排版
             Action::Export(scope) => {
                 let c = mgr.config.read().await;
                 if let Some(a) = c.agents.iter().find(|a| a.name == *name) {
@@ -1538,13 +1524,12 @@ mod logic {
                         return;
                     }
 
-                    // 需求1: 使用整洁的文本格式
                     let scope_str = if priv_scope { "私有" } else { "公有" };
                     let content = format_export_txt(name, &a.model, scope_str, hist);
 
                     let scope_file = if priv_scope { "private" } else { "public" };
                     let fname = format!(
-                        "{}_{}_{}_{}.txt", // 需求1: 改为 .txt
+                        "{}_{}_{}_{}.txt",
                         name,
                         scope_file,
                         uid,
@@ -1600,7 +1585,6 @@ mod logic {
                 }
             }
 
-            // 需求2: 支持删除多条记录
             Action::DeleteAt(scope) => {
                 if cmd.indices.is_empty() {
                     event.reply("❌ 请指定索引: 智能体-索引 (支持 1,3,5 或 1-5)");
