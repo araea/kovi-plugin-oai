@@ -439,10 +439,10 @@ mod utils {
 
         // 2. 提取当前消息中的图片 (文本由 Parser 处理，这里只拿图片)
         for seg in event.message.iter() {
-            if seg.type_ == "image" {
-                if let Some(u) = seg.data.get("url").and_then(|v| v.as_str()) {
-                    imgs.push(u.to_string());
-                }
+            if seg.type_ == "image"
+                && let Some(u) = seg.data.get("url").and_then(|v| v.as_str())
+            {
+                imgs.push(u.to_string());
             }
         }
 
@@ -1101,7 +1101,6 @@ mod logic {
         cmd: &Command,
         event: &Arc<kovi::MsgEvent>,
         mgr: &Arc<Manager>,
-        _bot: &Arc<kovi::RuntimeBot>,
     ) {
         struct ChatContext<'a> {
             name: &'a str,
@@ -1366,11 +1365,11 @@ mod logic {
 
         match cmd.action {
             Action::Chat => {
-                chat(name, &prompt, imgs, false, &cmd, event, mgr, bot).await;
+                chat(name, &prompt, imgs, false, &cmd, event, mgr).await;
             }
 
             Action::Regenerate => {
-                chat(name, &cmd.args, imgs, true, &cmd, event, mgr, bot).await;
+                chat(name, &cmd.args, imgs, true, &cmd, event, mgr).await;
             }
 
             Action::Stop => {
@@ -1745,6 +1744,8 @@ mod logic {
                     let mut results = Vec::new();
                     let mut extra_images = Vec::new(); // 用于收集需要独立发送的图片
 
+                    let re = Regex::new(r"!\[.*?\]\((https?://[^\s\)]+)\)").unwrap();
+
                     for i in &cmd.indices {
                         if *i > 0 && *i <= hist.len() {
                             let m = &hist[i - 1];
@@ -1759,7 +1760,6 @@ mod logic {
                             msg_imgs.extend(m.images.clone());
 
                             if cmd.text_mode {
-                                let re = Regex::new(r"!\[.*?\]\((https?://[^\s\)]+)\)").unwrap();
                                 content = re.replace_all(&content, "$1").to_string();
                             }
 
@@ -2091,22 +2091,19 @@ mod logic {
                         ])
                         .build();
 
-                    if let Ok(req) = req {
-                        if let Ok(res) = client.chat().create(req).await {
-                            if let Some(choice) = res.choices.first() {
-                                if let Some(content) = &choice.message.content {
-                                    let new_desc =
-                                        content.trim().replace(['"', '“', '”', '。', '.'], ""); // 简单清洗
+                    if let Ok(req) = req
+                        && let Ok(res) = client.chat().create(req).await
+                        && let Some(choice) = res.choices.first()
+                        && let Some(content) = &choice.message.content
+                    {
+                        let new_desc = content.trim().replace(['"', '“', '”', '。', '.'], ""); // 简单清洗
 
-                                    // 获取写锁更新数据
-                                    let mut c = mgr.config.write().await;
-                                    if let Some(a) = c.agents.iter_mut().find(|a| a.name == name) {
-                                        a.description = new_desc.clone();
-                                        mgr.save(&c);
-                                        success_count += 1;
-                                    }
-                                }
-                            }
+                        // 获取写锁更新数据
+                        let mut c = mgr.config.write().await;
+                        if let Some(a) = c.agents.iter_mut().find(|a| a.name == name) {
+                            a.description = new_desc.clone();
+                            mgr.save(&c);
+                            success_count += 1;
                         }
                     }
 
