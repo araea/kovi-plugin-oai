@@ -185,8 +185,9 @@ mod utils {
     pub static RE_API: OnceLock<Regex> = OnceLock::new();
     pub static RE_IDX: OnceLock<Regex> = OnceLock::new();
 
-    pub const MODEL_KEYWORDS: &[&str] =
-        &["gpt-5", "claude", "gemini-3", "deepseek", "kimi", "grok-4"];
+    pub const MODEL_KEYWORDS: &[&str] = &[
+        "gpt-5", "claude", "gemini-3", "deepseek", "kimi", "grok-4", "banana",
+    ];
 
     /// 全角转半角
     pub fn normalize(s: &str) -> String {
@@ -316,7 +317,31 @@ mod utils {
  .agent-name{font-size:16px;font-weight:600;color:#333;margin-bottom:8px}
  .agent-info{font-size:13px;color:#666;line-height:1.8}
  .agent-info code{font-size:12px}
- "#;
+ .model-group{margin-bottom:16px;break-inside:avoid;}
+ .model-header{background:#f0f2f5;color:#444;padding:6px 10px;border-radius:6px;font-weight:600;font-size:13px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;border-left:3px solid #0066cc;}
+ .model-count{background:rgba(0,0,0,0.05);color:#666;font-size:11px;padding:1px 6px;border-radius:4px;}
+ .agent-grid{display:grid;/*手机端一行两列，充分利用宽度*/grid-template-columns:repeat(2,1fr);gap:8px;}
+ .agent-mini{background:#fff;border:1px solid #eee;border-radius:6px;padding:8px;display:flex;flex-direction:column;justify-content:center;transition:background 0.2s;}
+ .agent-mini-top{display:flex;align-items:center;margin-bottom:4px;}
+ .agent-idx{background:#e6f0ff;color:#0066cc;font-size:10px;font-weight:700;min-width:18px;height:18px;border-radius:4px;display:flex;align-items:center;justify-content:center;margin-right:6px;flex-shrink:0;}
+ .agent-mini-name{font-size:14px;font-weight:600;color:#333;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;}
+ .agent-mini-desc{font-size:11px;color:#999;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;}
+ .provider-section { margin-bottom: 20px; break-inside: avoid; }
+ .provider-title { font-size: 14px; font-weight: 700; color: #555; margin-bottom: 8px; padding-left: 4px; border-left: 3px solid #666; line-height: 1.2; }
+ .chip-container { display: flex; flex-wrap: wrap; gap: 8px; }
+ .chip { background: #fff; border: 1px solid #ddd; border-radius: 6px; padding: 6px 10px; display: flex; align-items: center; font-size: 13px; color: #333; box-shadow: 0 1px 2px rgba(0,0,0,0.02); }
+ .chip-idx { background: #f0f0f0; color: #666; font-size: 11px; padding: 2px 5px; border-radius: 4px; margin-right: 6px; font-family: monospace; font-weight: 600; }
+ .chip-name { font-weight: 500; }
+ .chip-badge { margin-left: 6px; background: #e6f0ff; color: #0066cc; font-size: 10px; padding: 1px 5px; border-radius: 10px; font-weight: 600; }
+
+  .mod-group { margin-bottom: 16px; break-inside: avoid; }
+  .mod-title { font-size: 13px; font-weight: 700; color: #666; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px; border-left: 3px solid #0066cc; padding-left: 6px; }
+  .chip-box { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip { background: #fff; border: 1px solid #e0e0e0; border-radius: 6px; padding: 6px 10px; display: flex; align-items: center; font-size: 13px; color: #333; transition: all 0.2s; }
+  .chip-idx { background: #f5f5f5; color: #888; font-size: 11px; padding: 2px 6px; border-radius: 4px; margin-right: 8px; font-family: monospace; font-weight: 600; }
+  .chip-name { font-weight: 500; }
+  /* 正在使用的模型的徽标样式 */
+  .chip-bad { margin-left: 8px; background: #e6f7ff; color: #1890ff; font-size: 10px; padding: 2px 6px; border-radius: 10px; font-weight: 600; } "#;
         let html = format!(
             r#"<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>{css}</style></head><body><div class="md"><div class="title">{title}</div>{html_body}</div></body></html>"#
         );
@@ -365,13 +390,15 @@ mod utils {
     }
 
     /// 获取消息完整内容(含引用)
+    /// 获取引用内容(格式化为 Markdown)及所有相关图片
     pub async fn get_full_content(
         event: &std::sync::Arc<kovi::MsgEvent>,
         bot: &std::sync::Arc<kovi::RuntimeBot>,
     ) -> (String, Vec<String>) {
-        let mut text = String::new();
+        let mut quote_text = String::new();
         let mut imgs = Vec::new();
 
+        // 1. 处理引用消息 (Reply)
         if let Some(reply) = event.message.iter().find(|s| s.type_ == "reply")
             && let Some(id) = reply.data.get("id").and_then(|v| v.as_str())
             && let Ok(id) = id.parse::<i32>()
@@ -379,16 +406,17 @@ mod utils {
             && let Some(msg_data) = ret.data.get("message")
         {
             let reply_msg = Message::from_value(msg_data.clone()).unwrap_or_default();
-            text.push_str("【引用】\n");
+            let mut temp_text = String::new();
+
             for seg in reply_msg.iter() {
                 match seg.type_.as_str() {
                     "text" => {
                         if let Some(t) = seg.data.get("text").and_then(|v| v.as_str()) {
-                            text.push_str(t);
+                            temp_text.push_str(t);
                         }
                     }
                     "image" => {
-                        text.push_str("[图片]");
+                        // 引用图片仅添加到图片列表，不再在文本中插入 "[图片]" 标记
                         if let Some(u) = seg.data.get("url").and_then(|v| v.as_str()) {
                             imgs.push(u.to_string());
                         }
@@ -396,29 +424,39 @@ mod utils {
                     _ => {}
                 }
             }
-            text.push_str("\n【/引用】\n");
-        }
 
-        for seg in event.message.iter() {
-            match seg.type_.as_str() {
-                "text" => {
-                    if let Some(t) = seg.data.get("text").and_then(|v| v.as_str()) {
-                        text.push_str(t);
-                    }
+            // 使用 Markdown 引用块 "> "
+            // 且如果 temp_text 为空（纯图片引用），则不添加任何引用文本
+            let trimmed = temp_text.trim();
+            if !trimmed.is_empty() {
+                for line in trimmed.lines() {
+                    quote_text.push_str("> ");
+                    quote_text.push_str(line);
+                    quote_text.push('\n');
                 }
-                "image" => {
-                    if let Some(u) = seg.data.get("url").and_then(|v| v.as_str()) {
-                        imgs.push(u.to_string());
-                    }
-                }
-                _ => {}
+                quote_text.push('\n'); // 引用块与正文的分隔
             }
         }
-        (text.trim().to_string(), imgs)
+
+        // 2. 提取当前消息中的图片 (文本由 Parser 处理，这里只拿图片)
+        for seg in event.message.iter() {
+            if seg.type_ == "image" {
+                if let Some(u) = seg.data.get("url").and_then(|v| v.as_str()) {
+                    imgs.push(u.to_string());
+                }
+            }
+        }
+
+        // 返回 (引用文本, 所有图片URL)
+        (quote_text, imgs)
     }
 
     /// 格式化历史记录
-    pub fn format_history(hist: &[super::types::ChatMessage], offset: usize) -> String {
+    pub fn format_history(
+        hist: &[super::types::ChatMessage],
+        offset: usize,
+        text_mode: bool,
+    ) -> String {
         hist.iter()
             .enumerate()
             .map(|(i, m)| {
@@ -429,27 +467,46 @@ mod utils {
                     _ => "❓",
                 };
                 let time = chrono::DateTime::from_timestamp(m.timestamp, 0)
-                    .map(|t| {
+                    .map(|dt| {
                         use chrono::TimeZone;
                         chrono::Local
-                            .from_utc_datetime(&t.naive_utc())
+                            .from_utc_datetime(&dt.naive_utc())
                             .format("%m-%d %H:%M")
                             .to_string()
                     })
                     .unwrap_or_default();
-                let img_note = if m.images.is_empty() {
-                    String::new()
-                } else {
-                    format!(" [{}图]", m.images.len())
-                };
-                format!(
-                    "**#{} {} {}{}**\n{}",
-                    offset + i + 1,
-                    emoji,
-                    time,
-                    img_note,
-                    m.content
-                )
+
+                let mut body = m.content.clone();
+
+                if !m.images.is_empty() {
+                    if !body.is_empty() {
+                        body.push_str("\n\n");
+                    }
+
+                    if text_mode {
+                        let links = m
+                            .images
+                            .iter()
+                            .map(|u| format!("- [图片] {}", u))
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        body.push_str(&links);
+                    } else {
+                        let imgs = m
+                            .images
+                            .iter()
+                            .map(|u| format!("![image]({})", u))
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        body.push_str(&imgs);
+                    }
+                }
+
+                if body.trim().is_empty() {
+                    body = "(无内容)".to_string();
+                }
+
+                format!("**#{} {} {}**\n{}", offset + i + 1, emoji, time, body)
             })
             .collect::<Vec<_>>()
             .join("\n\n---\n\n")
@@ -543,6 +600,7 @@ mod parser {
         #[default]
         Create,
         Copy,
+        Rename,
         SetDesc,
         Delete,
         List,
@@ -559,6 +617,7 @@ mod parser {
         ClearAllPublic,
         ClearEverything,
         Help,
+        AutoFillDescriptions(String),
     }
 
     #[derive(Debug, Clone)]
@@ -605,6 +664,11 @@ mod parser {
 
         if norm == "-*!" {
             return Some(Command::new("", Action::ClearEverything));
+        }
+
+        if norm.starts_with("##:") {
+            let args = norm.get(3..).unwrap_or("").trim().to_string();
+            return Some(Command::new("", Action::AutoFillDescriptions(args)));
         }
 
         None
@@ -753,12 +817,19 @@ mod parser {
             return (Action::Chat, r.to_string(), vec![]);
         }
 
-        if s == "~" || (s.starts_with('~') && !s.starts_with("~#") && !s.starts_with("~$")) {
-            let arg = if s.len() > 1 {
-                r.get(1..).unwrap_or("").trim()
+        if (s == "~" || s == "～")
+            || ((s.starts_with('~') || s.starts_with('～'))
+                && !s.starts_with("~#")
+                && !s.starts_with("~$")
+                && !s.starts_with("～#")
+                && !s.starts_with("～$"))
+        {
+            let skip_len = if s.starts_with('～') {
+                '～'.len_utf8()
             } else {
-                ""
+                '~'.len_utf8()
             };
+            let arg = r.get(skip_len..).unwrap_or("").trim();
             return (Action::Regenerate, arg.to_string(), vec![]);
         }
 
@@ -774,6 +845,16 @@ mod parser {
             };
             let arg = r.get(skip_len..).unwrap_or("").trim();
             return (Action::Copy, arg.to_string(), vec![]);
+        }
+
+        if s.starts_with("~=") || s.starts_with("~＝") {
+            let skip_len = if r.starts_with("~＝") {
+                "~＝".chars().map(|c| c.len_utf8()).sum()
+            } else {
+                "~=".chars().map(|c| c.len_utf8()).sum()
+            };
+            let arg = r.get(skip_len..).unwrap_or("").trim();
+            return (Action::Rename, arg.to_string(), vec![]);
         }
 
         if (s.starts_with(':') || s.starts_with('：'))
@@ -960,12 +1041,12 @@ mod data {
 
 // --- 业务逻辑 ---
 mod logic {
+    use crate::utils::truncate_str;
+
     use super::data::Manager;
     use super::parser::{Action, Command, Scope};
     use super::types::{Agent, ChatMessage};
-    use super::utils::{
-        escape_markdown_special, format_export_txt, format_history, render_md, truncate_str,
-    };
+    use super::utils::{escape_markdown_special, format_export_txt, format_history, render_md};
     use async_openai::{
         Client,
         config::OpenAIConfig,
@@ -1137,6 +1218,9 @@ mod logic {
                                 .unwrap()
                                 .into(),
                         );
+                    }
+                    if parts.is_empty() {
+                        continue;
                     }
                     msgs.push(
                         ChatCompletionRequestUserMessageArgs::default()
@@ -1340,6 +1424,36 @@ mod logic {
                 }
             }
 
+            Action::Rename => {
+                if cmd.args.is_empty() {
+                    reply_text(event, "❌ 请指定新名称: 智能体~=新名称");
+                    return;
+                }
+
+                if cmd.args.chars().count() > 7
+                    || cmd.args.chars().any(|c| "&\"#~/ -_'!@$%:*".contains(c))
+                {
+                    reply_text(event, "❌ 名称限制：最多7字且不能包含指令符号");
+                    return;
+                }
+
+                let mut c = mgr.config.write().await;
+                if c.agents.iter().any(|a| a.name == cmd.args) {
+                    reply_text(event, format!("❌ 目标名称 {} 已存在", cmd.args));
+                    return;
+                }
+
+                // 先找要重命名的智能体的索引
+                let idx_opt = c.agents.iter().position(|a| a.name == *name);
+                if let Some(idx) = idx_opt {
+                    c.agents[idx].name = cmd.args.clone();
+                    mgr.save(&c);
+                    reply_text(event, format!("🏷️ 已重命名 {} → {}", name, cmd.args));
+                } else {
+                    reply_text(event, format!("❌ {} 不存在", name));
+                }
+            }
+
             Action::SetDesc => {
                 if cmd.args.is_empty() {
                     reply_text(event, "❌ 请提供描述: 智能体:描述内容");
@@ -1394,6 +1508,10 @@ mod logic {
             Action::ViewPrompt => {
                 let c = mgr.config.read().await;
                 if let Some(a) = c.agents.iter().find(|a| a.name == *name) {
+                    if cmd.text_mode {
+                        reply_text(event, &a.system_prompt);
+                        return;
+                    }
                     let prompt_display = if a.system_prompt.is_empty() {
                         "(空)".to_string()
                     } else {
@@ -1418,36 +1536,54 @@ mod logic {
             Action::List => {
                 let c = mgr.config.read().await;
                 if c.agents.is_empty() {
-                    reply_text(event, "📋 暂无智能体，使用 #名称 模型 提示词 创建");
+                    reply_text(event, "📋 暂无智能体，使用 ##名称 模型 提示词 创建");
                     return;
                 }
-                let mut sorted_agents = c.agents.clone();
-                sorted_agents.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-                let list = sorted_agents
-                    .iter()
-                    .enumerate()
-                    .map(|(i, a)| {
-                        let desc = if a.description.is_empty() {
+
+                // 分组逻辑：使用 BTreeMap 自动按模型名称排序
+                use std::collections::BTreeMap;
+                let mut groups: BTreeMap<String, Vec<(usize, &Agent)>> = BTreeMap::new();
+
+                // 遍历并分组 (保留原始索引 i+1 以便用户操作)
+                for (i, a) in c.agents.iter().enumerate() {
+                    groups.entry(a.model.clone()).or_default().push((i + 1, a));
+                }
+
+                // 生成 HTML
+                let mut html_parts = Vec::new();
+
+                // 遍历每一个模型分组
+                for (model, mut agents) in groups {
+                    // 组内按智能体名称排序
+                    agents.sort_by(|a, b| a.1.name.to_lowercase().cmp(&b.1.name.to_lowercase()));
+
+                    // 组头
+                    html_parts.push(format!(
+                                              r#"<div class="model-group"><div class="model-header"><span>📦 {}</span><span class="model-count">{}</span></div><div class="agent-grid">"#,
+                                              model, agents.len()
+                                          ));
+
+                    // 组内网格
+                    for (real_idx, a) in agents {
+                        // 逻辑：优先显示描述；如果没有描述，则截取系统提示词的前 20 个字作为预览；
+                        let desc_display = if !a.description.is_empty() {
+                            truncate_str(&a.description, 20)
+                        } else if !a.system_prompt.is_empty() {
+                            truncate_str(&a.system_prompt, 20)
+                        } else {
                             "无描述".to_string()
-                        } else {
-                            truncate_str(&a.description, 30)
                         };
-                        let prompt_preview = if a.system_prompt.is_empty() {
-                            "无提示词".to_string()
-                        } else {
-                            truncate_str(&a.system_prompt, 40)
-                        };
-                        format!(
-                            "<div class=\"agent-card\">\n<div class=\"agent-name\">{}. {}</div>\n<div class=\"agent-info\">\n📦 <code>{}</code><br>\n📝 {}<br>\n💬 {}\n</div>\n</div>",
-                            i + 1,
-                            a.name,
-                            a.model,
-                            desc,
-                            prompt_preview
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
+
+                        html_parts.push(format!(
+                                            r#"<div class="agent-mini"><div class="agent-mini-top"><div class="agent-idx">{}</div><div class="agent-mini-name">{}</div></div><div class="agent-mini-desc">{}</div></div>"#,
+                                            real_idx, a.name, desc_display
+                                        ));
+                    }
+                    html_parts.push("</div></div>".to_string());
+                }
+
+                let list = html_parts.join("\n");
+
                 reply(
                     event,
                     &list,
@@ -1470,43 +1606,109 @@ mod logic {
 
             Action::ListModels => {
                 let c = mgr.config.read().await;
+
+                // 1. 如果配置为空，尝试抓取
                 if c.models.is_empty() {
                     drop(c);
                     reply_text(event, "⏳ 正在获取模型列表...");
-                    match mgr.fetch_models().await {
-                        Ok(models) => {
-                            let list = models
-                                .iter()
-                                .enumerate()
-                                .map(|(i, m)| format!("{}. `{}`", i + 1, m))
-                                .collect::<Vec<_>>()
-                                .join("\n");
-                            reply(
-                                event,
-                                &list,
-                                cmd.text_mode,
-                                &format!("📋 可用模型 (共{}个)", models.len()),
-                            )
-                            .await;
-                        }
-                        Err(e) => reply_text(event, format!("❌ 获取失败: {}", e)),
+                    if let Err(e) = mgr.fetch_models().await {
+                        reply_text(event, format!("❌ 获取失败: {}", e));
+                        return;
                     }
-                } else {
-                    let list = c
-                        .models
-                        .iter()
-                        .enumerate()
-                        .map(|(i, m)| format!("{}. `{}`", i + 1, m))
-                        .collect::<Vec<_>>()
-                        .join("\n");
-                    reply(
-                        event,
-                        &list,
-                        cmd.text_mode,
-                        &format!("📋 模型列表 (共{}个)", c.models.len()),
-                    )
-                    .await;
                 }
+
+                // 重新读取
+                let c = mgr.config.read().await;
+                let models = &c.models;
+
+                if models.is_empty() {
+                    reply_text(event, "📭 未找到可用模型 (请检查过滤关键字)");
+                    return;
+                }
+
+                // 2. 统计使用热度 (哪个模型被多少个智能体使用了)
+                use std::collections::HashMap;
+                let mut usage_count = HashMap::new();
+                for agent in &c.agents {
+                    *usage_count.entry(agent.model.clone()).or_insert(0) += 1;
+                }
+
+                // 3. 动态分组逻辑
+                // 直接利用 utils::MODEL_KEYWORDS 进行分组
+                let mut groups: HashMap<String, Vec<(usize, String)>> = HashMap::new();
+                let mut other_models = Vec::new();
+
+                for (i, m) in models.iter().enumerate() {
+                    let idx = i + 1;
+                    let lower = m.to_lowercase();
+                    let mut matched = false;
+
+                    for &kw in crate::utils::MODEL_KEYWORDS {
+                        if lower.contains(kw) {
+                            // 将关键字首字母大写作为组名 (e.g. "gpt-5" -> "Gpt-5 Series")
+                            let group_name = format!(
+                                "{} Series",
+                                kw.chars().next().unwrap().to_uppercase().to_string() + &kw[1..]
+                            );
+                            groups.entry(group_name).or_default().push((idx, m.clone()));
+                            matched = true;
+                            break;
+                        }
+                    }
+
+                    if !matched {
+                        other_models.push((idx, m.clone()));
+                    }
+                }
+
+                // 4. 生成 HTML
+                let mut html = String::new();
+
+                // 辅助渲染函数
+                let render_group = |title: &str, items: &Vec<(usize, String)>| -> String {
+                    let mut s = format!(
+                        r#"<div class="mod-group"><div class="mod-title">{}</div><div class="chip-box">"#,
+                        title
+                    );
+                    for (idx, name) in items {
+                        let badge = if let Some(cnt) = usage_count.get(name) {
+                            format!(r#"<span class="chip-bad">{}用</span>"#, cnt)
+                        } else {
+                            String::new()
+                        };
+                        s.push_str(&format!(
+                                        r#"<div class="chip"><span class="chip-idx">{}</span><span class="chip-name">{}</span>{}</div>"#,
+                                        idx, name, badge
+                                    ));
+                    }
+                    s.push_str("</div></div>");
+                    s
+                };
+
+                // 按 MODEL_KEYWORDS 的定义顺序渲染 (保证顺序可控)
+                for &kw in crate::utils::MODEL_KEYWORDS {
+                    let group_name = format!(
+                        "{} Series",
+                        kw.chars().next().unwrap().to_uppercase().to_string() + &kw[1..]
+                    );
+                    if let Some(items) = groups.get(&group_name) {
+                        html.push_str(&render_group(&group_name, items));
+                    }
+                }
+
+                // 渲染未分类的模型 (如果有漏网之鱼)
+                if !other_models.is_empty() {
+                    html.push_str(&render_group("Other Models", &other_models));
+                }
+
+                // 5. 发送
+                reply(
+                    event,
+                    &html,
+                    cmd.text_mode,
+                    &format!("🧩 模型列表 (共{}个)", models.len()),
+                )
+                .await;
             }
 
             Action::ViewAll(scope) => {
@@ -1519,7 +1721,7 @@ mod logic {
                         reply_text(event, format!("📭 {} {}历史为空", name, s));
                         return;
                     }
-                    let content = format_history(hist, 0);
+                    let content = format_history(hist, 0, cmd.text_mode);
                     let header = format!(
                         "{} {}历史 ({} 条)",
                         name,
@@ -1553,17 +1755,26 @@ mod logic {
                                 _ => "❓",
                             };
 
-                            // 处理内容
                             let mut content = m.content.clone();
-                            // 提取内容中的 markdown 图片
                             let mut msg_imgs = extract_image_urls(&content);
-                            // 合并该消息自带的图片（如用户上传的）
                             msg_imgs.extend(m.images.clone());
 
-                            // 文本模式下，将 markdown 图片语法仅保留 url
                             if cmd.text_mode {
                                 let re = Regex::new(r"!\[.*?\]\((https?://[^\s\)]+)\)").unwrap();
                                 content = re.replace_all(&content, "$1").to_string();
+                            }
+
+                            if !m.images.is_empty() {
+                                if !content.is_empty() {
+                                    content.push_str("\n\n"); // 强制换段
+                                }
+                                for url in &m.images {
+                                    if cmd.text_mode {
+                                        content.push_str(&format!("\n- {}", url));
+                                    } else {
+                                        content.push_str(&format!("\n![image]({})", url));
+                                    }
+                                }
                             }
 
                             // 收集图片
@@ -1747,63 +1958,167 @@ mod logic {
 
             Action::Help => {
                 let help = r#"## 模式前缀（可组合）
-| 符号 | 含义 |
-|:---:|------|
-| `&` | 私有模式 |
-| `"` | 文本模式 |
+    | 符号 | 含义 |
+    |:---:|------|
+    | `&` | 私有模式 |
+    | `"` | 文本模式 |
 
-## 智能体管理
-| 指令 | 功能 | 示例 |
-|------|------|------|
-| `##名称 模型 提示词` | 创建/更新 | `##助手 gpt-4o 你是助手` |
-| `智能体~#新名` | 复制 | `助手~#助手2` |
-| `智能体:描述` | 设置描述 | `助手:通用助手` |
-| `-#名称` | 删除 | `-#助手` |
-| `/#` | 列表 | `/#` |
+    ## 智能体管理
+    | 指令 | 功能 | 示例 |
+    |------|------|------|
+    | `##名称 模型 提示词` | 创建/更新 | `##助手 gpt-4o 你是助手` |
+    | `智能体~=新名` | 重命名 | `助手~=管家` |
+    | `智能体~#新名` | 复制 | `助手~#助手2` |
+    | `智能体:描述` | 设置描述 | `助手:通用助手` |
+    | `-#名称` | 删除 | `-#助手` |
+    | `/#` | 列表 | `/#` |
 
-## 配置修改
-| 指令 | 功能 | 示例 |
-|------|------|------|
-| `智能体%模型` | 修改模型 | `助手%gpt-4` |
-| `智能体$提示词` | 修改提示词 | `助手$你是...` |
-| `智能体$` | 清空提示词 | `助手$` |
-| `智能体/$` | 查看提示词 | `助手/$` |
-| `/%` | 模型列表 | `/%` |
+    ## 配置修改
+    | 指令 | 功能 | 示例 |
+    |------|------|------|
+    | `智能体%模型` | 修改模型 | `助手%gpt-4` |
+    | `智能体$提示词` | 修改提示词 | `助手$你是...` |
+    | `智能体$` | 清空提示词 | `助手$` |
+    | `智能体/$` | 查看提示词 | `助手/$` |
+    | `/%` | 模型列表 | `/%` |
 
-## 对话控制
-| 指令 | 功能 |
-|------|------|
-| `智能体 内容` | 对话 |
-| `"智能体 内容` | 文本模式对话 |
-| `&智能体 内容` | 私有对话 |
-| `智能体~` | 重新生成 |
-| `智能体!` | 停止生成 |
+    ## 对话控制
+    | 指令 | 功能 |
+    |------|------|
+    | `智能体 内容` | 对话 |
+    | `"智能体 内容` | 文本模式对话 |
+    | `&智能体 内容` | 私有对话 |
+    | `智能体~` | 重新生成 |
+    | `智能体!` | 停止生成 |
 
-## 历史管理
-| 指令 | 功能 |
-|------|------|
-| `智能体/*` | 查看所有 |
-| `智能体/1` | 查看第1条 |
-| `智能体/1-5` | 查看1-5条 |
-| `智能体_*` | 导出(.txt) |
-| `智能体'1 新内容` | 编辑第1条 |
-| `智能体-1` | 删除第1条 |
-| `智能体-1,3,5` | 删除多条 |
-| `智能体-1-5` | 删除范围 |
-| `智能体-*` | 清空历史 |
+    ## 历史管理
+    | 指令 | 功能 |
+    |------|------|
+    | `智能体/*` | 查看所有 |
+    | `智能体/1` | 查看第1条 |
+    | `智能体/1-5` | 查看1-5条 |
+    | `智能体_*` | 导出(.txt) |
+    | `智能体'1 新内容` | 编辑第1条 |
+    | `智能体-1` | 删除第1条 |
+    | `智能体-1,3,5` | 删除多条 |
+    | `智能体-1-5` | 删除范围 |
+    | `智能体-*` | 清空历史 |
 
-> 加 `&` 前缀操作私有历史: `&智能体/*`
+    > 加 `&` 前缀操作私有历史: `&智能体/*`
 
-## 危险操作
-| 指令 | 功能 |
-|------|------|
-| `-*` | 清空所有智能体公有历史 |
-| `-*!` | 清空所有历史 |
+    ## 危险操作
+    | 指令 | 功能 |
+    |------|------|
+    | `-*` | 清空所有智能体公有历史 |
+    | `-*!` | 清空所有历史 |
 
-## API 配置
-直接发送: `API地址 API密钥`
-"#;
+    ## API 配置
+    直接发送: `API地址 API密钥`
+    "#;
                 reply(event, help, cmd.text_mode, "🤖 OAI 符号指令帮助").await;
+            }
+
+            Action::AutoFillDescriptions(model_ref) => {
+                let (target_agents, api_config, use_model) = {
+                    let c = mgr.config.read().await;
+
+                    // 1. 确定使用的模型
+                    let models = c.models.clone();
+                    let resolved_model = if model_ref.is_empty() {
+                        c.default_model.clone()
+                    } else {
+                        mgr.resolve_model(&model_ref, &models).unwrap_or(model_ref)
+                    };
+
+                    // 2. 筛选需要生成的智能体 (描述为空 或 仅仅是"新建智能体")
+                    let targets: Vec<(String, String)> = c
+                        .agents
+                        .iter()
+                        .filter(|a| a.description.is_empty() || a.description == "新建智能体")
+                        .map(|a| (a.name.clone(), a.system_prompt.clone()))
+                        .collect();
+
+                    (
+                        targets,
+                        (c.api_base.clone(), c.api_key.clone()),
+                        resolved_model,
+                    )
+                };
+
+                if target_agents.is_empty() {
+                    reply_text(event, "✅ 所有智能体均已有描述，无需处理。");
+                    return;
+                }
+
+                if api_config.0.is_empty() || api_config.1.is_empty() {
+                    reply_text(event, "❌ API 未配置");
+                    return;
+                }
+
+                reply_text(
+                    event,
+                    format!(
+                        "🤖 开始使用 [{}] 为 {} 个智能体生成描述，请稍候...",
+                        use_model,
+                        target_agents.len()
+                    ),
+                );
+
+                let client = Client::with_config(
+                    OpenAIConfig::new()
+                        .with_api_base(api_config.0)
+                        .with_api_key(api_config.1),
+                );
+
+                let mut success_count = 0;
+
+                for (name, prompt) in target_agents {
+                    // 这里的 Prompt 专门用于生成简短描述
+                    let gen_prompt = format!(
+                        "请阅读以下角色的 System Prompt，为其生成一个极简短的中文功能描述（Role/Tag）。\n\
+                                    要求：\n1. 必须控制在 10 个字以内\n2. 不要包含任何标点符号\n3. 直接输出描述内容，不要解释\n\n\
+                                    System Prompt:\n{}",
+                        prompt
+                    );
+
+                    let req = CreateChatCompletionRequestArgs::default()
+                        .model(&use_model)
+                        .messages(vec![
+                            ChatCompletionRequestUserMessageArgs::default()
+                                .content(gen_prompt)
+                                .build()
+                                .unwrap()
+                                .into(),
+                        ])
+                        .build();
+
+                    if let Ok(req) = req {
+                        if let Ok(res) = client.chat().create(req).await {
+                            if let Some(choice) = res.choices.first() {
+                                if let Some(content) = &choice.message.content {
+                                    let new_desc =
+                                        content.trim().replace(['"', '“', '”', '。', '.'], ""); // 简单清洗
+
+                                    // 获取写锁更新数据
+                                    let mut c = mgr.config.write().await;
+                                    if let Some(a) = c.agents.iter_mut().find(|a| a.name == name) {
+                                        a.description = new_desc.clone();
+                                        mgr.save(&c);
+                                        success_count += 1;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // 小停顿，避免并发过高 (1.5秒)
+                    kovi::tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+                }
+
+                reply_text(
+                    event,
+                    format!("✅ 批量处理完成，已更新 {} 个智能体的描述。", success_count),
+                );
             }
 
             Action::Create => {}
@@ -1917,23 +2232,18 @@ async fn main() {
             }
 
             if let Some(cmd) = parser::parse_agent_cmd(raw, &agents) {
-                let (full_text, imgs) = utils::get_full_content(&event, &bot).await;
+                let (quote, imgs) = utils::get_full_content(&event, &bot).await;
+
+                // 拼接提示词：引用 + 用户输入参数
                 let prompt = if matches!(
                     cmd.action,
                     parser::Action::Chat | parser::Action::Regenerate
                 ) {
-                    if full_text.contains("【引用") {
-                        if cmd.args.is_empty() {
-                            full_text
-                        } else {
-                            format!("{}\n{}", full_text, cmd.args)
-                        }
-                    } else {
-                        cmd.args.clone()
-                    }
+                    format!("{}{}", quote, cmd.args).trim().to_string()
                 } else {
                     cmd.args.clone()
                 };
+
                 logic::execute(cmd, prompt, imgs, &event, &mgr, &bot).await;
             }
         }
