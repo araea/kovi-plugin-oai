@@ -977,14 +977,24 @@ mod logic {
     use regex::Regex;
     use std::{fs::File, io::Write, sync::Arc};
 
+    pub(crate) fn reply_text(event: &Arc<kovi::MsgEvent>, text: impl Into<String>) {
+        event.reply(
+            Message::new()
+                .add_reply(event.message_id)
+                .add_text(text.into()),
+        );
+    }
+
     async fn reply(event: &Arc<kovi::MsgEvent>, text: &str, text_mode: bool, header: &str) {
+        let msg = Message::new().add_reply(event.message_id);
+
         if text_mode {
-            event.reply(text);
+            event.reply(msg.add_text(text));
             return;
         }
         match render_md(text, header).await {
-            Ok(b64) => event.reply(Message::new().add_image(&format!("base64://{}", b64))),
-            Err(_) => event.reply(text),
+            Ok(b64) => event.reply(msg.add_image(&format!("base64://{}", b64))),
+            Err(_) => event.reply(msg.add_text(text)),
         }
     }
 
@@ -1025,7 +1035,7 @@ mod logic {
             {
                 let generating = ctx.mgr.generating.read().await;
                 if generating.is_generating(ctx.name, is_priv_ctx, &uid) {
-                    ctx.event.reply("⏳ 正在生成中，请等待或使用 智能体! 停止");
+                    reply_text(ctx.event, "⏳ 正在生成中，请等待或使用 智能体! 停止");
                     return;
                 }
             }
@@ -1039,13 +1049,13 @@ mod logic {
             let agent = match agent {
                 Some(a) => a,
                 None => {
-                    ctx.event.reply(format!("❌ 智能体 {} 不存在", ctx.name));
+                    reply_text(ctx.event, format!("❌ 智能体 {} 不存在", ctx.name));
                     return;
                 }
             };
 
             if api.0.is_empty() || api.1.is_empty() {
-                ctx.event.reply("❌ API 未配置");
+                reply_text(ctx.event, "❌ API 未配置");
                 return;
             }
 
@@ -1063,7 +1073,7 @@ mod logic {
                 }
             } else {
                 if ctx.prompt.is_empty() && ctx.imgs.is_empty() {
-                    ctx.event.reply("💬 请输入内容");
+                    reply_text(ctx.event, "💬 请输入内容");
                     return;
                 }
                 hist.push(ChatMessage::new("user", ctx.prompt, ctx.imgs.clone()));
@@ -1150,7 +1160,7 @@ mod logic {
                 Err(e) => {
                     let mut generating = ctx.mgr.generating.write().await;
                     generating.set_generating(ctx.name, is_priv_ctx, &uid, false);
-                    ctx.event.reply(format!("❌ 请求构建失败: {}", e));
+                    reply_text(ctx.event, format!("❌ 请求构建失败: {}", e));
                     return;
                 }
             };
@@ -1237,7 +1247,7 @@ mod logic {
                         let mut generating = ctx.mgr.generating.write().await;
                         generating.set_generating(ctx.name, is_priv_ctx, &uid, false);
                     }
-                    ctx.event.reply(format!("❌ API错误: {}", e));
+                    reply_text(ctx.event, format!("❌ API错误: {}", e));
                 }
             }
         }
@@ -1284,28 +1294,28 @@ mod logic {
                 if let Some(a) = c.agents.iter_mut().find(|a| a.name == *name) {
                     a.generation_id += 1;
                     mgr.save(&c);
-                    event.reply("🛑 已停止");
+                    reply_text(event, "🛑 已停止");
                 } else {
-                    event.reply(format!("❌ 智能体 {} 不存在", name));
+                    reply_text(event, format!("❌ 智能体 {} 不存在", name));
                 }
             }
 
             Action::Copy => {
                 if cmd.args.is_empty() {
-                    event.reply("❌ 请指定新名称: 智能体~#新名称");
+                    reply_text(event, "❌ 请指定新名称: 智能体~#新名称");
                     return;
                 }
 
                 if cmd.args.chars().count() > 7
                     || cmd.args.chars().any(|c| "&\"#~/ -_'!@$%:*".contains(c))
                 {
-                    event.reply("❌ 名称限制：最多7字且不能包含指令符号");
+                    reply_text(event, "❌ 名称限制：最多7字且不能包含指令符号");
                     return;
                 }
 
                 let mut c = mgr.config.write().await;
                 if c.agents.iter().any(|a| a.name == cmd.args) {
-                    event.reply(format!("❌ {} 已存在", cmd.args));
+                    reply_text(event, format!("❌ {} 已存在", cmd.args));
                     return;
                 }
                 if let Some(src) = c.agents.iter().find(|a| a.name == *name).cloned() {
@@ -1318,30 +1328,30 @@ mod logic {
                     new_agent.description = src.description.clone();
                     c.agents.push(new_agent);
                     mgr.save(&c);
-                    event.reply(format!("✨ 已复制 {} → {}", name, cmd.args));
+                    reply_text(event, format!("📑 已复制 {} → {}", name, cmd.args));
                 } else {
-                    event.reply(format!("❌ {} 不存在", name));
+                    reply_text(event, format!("❌ {} 不存在", name));
                 }
             }
 
             Action::SetDesc => {
                 if cmd.args.is_empty() {
-                    event.reply("❌ 请提供描述: 智能体:描述内容");
+                    reply_text(event, "❌ 请提供描述: 智能体:描述内容");
                     return;
                 }
                 let mut c = mgr.config.write().await;
                 if let Some(a) = c.agents.iter_mut().find(|a| a.name == *name) {
                     a.description = cmd.args.clone();
                     mgr.save(&c);
-                    event.reply(format!("📝 {} 描述已更新", name));
+                    reply_text(event, format!("📝 {} 描述已更新", name));
                 } else {
-                    event.reply(format!("❌ {} 不存在", name));
+                    reply_text(event, format!("❌ {} 不存在", name));
                 }
             }
 
             Action::SetModel => {
                 if cmd.args.is_empty() {
-                    event.reply("❌ 请指定模型: 智能体%模型名");
+                    reply_text(event, "❌ 请指定模型: 智能体%模型名");
                     return;
                 }
                 let mut c = mgr.config.write().await;
@@ -1351,12 +1361,12 @@ mod logic {
                         let old = a.model.clone();
                         a.model = model.clone();
                         mgr.save(&c);
-                        event.reply(format!("🔄 {} 模型: {} → {}", name, old, model));
+                        reply_text(event, format!("🔄 {} 模型: {} → {}", name, old, model));
                     } else {
-                        event.reply(format!("❌ {} 不存在", name));
+                        reply_text(event, format!("❌ {} 不存在", name));
                     }
                 } else {
-                    event.reply("❌ 无效模型");
+                    reply_text(event, "❌ 无效模型");
                 }
             }
 
@@ -1366,12 +1376,12 @@ mod logic {
                     a.system_prompt = cmd.args.clone();
                     mgr.save(&c);
                     if cmd.args.is_empty() {
-                        event.reply(format!("📝 {} 提示词已清空", name));
+                        reply_text(event, format!("📝 {} 提示词已清空", name));
                     } else {
-                        event.reply(format!("📝 {} 提示词已更新", name));
+                        reply_text(event, format!("📝 {} 提示词已更新", name));
                     }
                 } else {
-                    event.reply(format!("❌ {} 不存在", name));
+                    reply_text(event, format!("❌ {} 不存在", name));
                 }
             }
 
@@ -1395,14 +1405,14 @@ mod logic {
                     )
                     .await;
                 } else {
-                    event.reply(format!("❌ {} 不存在", name));
+                    reply_text(event, format!("❌ {} 不存在", name));
                 }
             }
 
             Action::List => {
                 let c = mgr.config.read().await;
                 if c.agents.is_empty() {
-                    event.reply("📋 暂无智能体，使用 #名称 模型 提示词 创建");
+                    reply_text(event, "📋 暂无智能体，使用 #名称 模型 提示词 创建");
                     return;
                 }
                 let mut sorted_agents = c.agents.clone();
@@ -1446,9 +1456,9 @@ mod logic {
                 if let Some(idx) = c.agents.iter().position(|a| a.name == *name) {
                     c.agents.remove(idx);
                     mgr.save(&c);
-                    event.reply(format!("🗑️ 已删除 {}", name));
+                    reply_text(event, format!("🗑️ 已删除 {}", name));
                 } else {
-                    event.reply(format!("❌ {} 不存在", name));
+                    reply_text(event, format!("❌ {} 不存在", name));
                 }
             }
 
@@ -1456,7 +1466,7 @@ mod logic {
                 let c = mgr.config.read().await;
                 if c.models.is_empty() {
                     drop(c);
-                    event.reply("⏳ 正在获取模型列表...");
+                    reply_text(event, "⏳ 正在获取模型列表...");
                     match mgr.fetch_models().await {
                         Ok(models) => {
                             let list = models
@@ -1473,7 +1483,7 @@ mod logic {
                             )
                             .await;
                         }
-                        Err(e) => event.reply(format!("❌ 获取失败: {}", e)),
+                        Err(e) => reply_text(event, format!("❌ 获取失败: {}", e)),
                     }
                 } else {
                     let list = c
@@ -1500,7 +1510,7 @@ mod logic {
                     let hist = a.history(priv_scope, &uid);
                     if hist.is_empty() {
                         let s = if priv_scope { "私有" } else { "公有" };
-                        event.reply(format!("📭 {} {}历史为空", name, s));
+                        reply_text(event, format!("📭 {} {}历史为空", name, s));
                         return;
                     }
                     let content = format_history(hist, 0);
@@ -1512,13 +1522,13 @@ mod logic {
                     );
                     reply(event, &content, cmd.text_mode, &header).await;
                 } else {
-                    event.reply(format!("❌ {} 不存在", name));
+                    reply_text(event, format!("❌ {} 不存在", name));
                 }
             }
 
             Action::ViewAt(scope) => {
                 if cmd.indices.is_empty() {
-                    event.reply("❌ 请指定索引: 智能体/索引");
+                    reply_text(event, "❌ 请指定索引: 智能体/索引");
                     return;
                 }
                 let c = mgr.config.read().await;
@@ -1538,7 +1548,7 @@ mod logic {
                         }
                     }
                     if results.is_empty() {
-                        event.reply("❌ 索引无效");
+                        reply_text(event, "❌ 索引无效");
                     } else {
                         reply(
                             event,
@@ -1549,7 +1559,7 @@ mod logic {
                         .await;
                     }
                 } else {
-                    event.reply(format!("❌ {} 不存在", name));
+                    reply_text(event, format!("❌ {} 不存在", name));
                 }
             }
 
@@ -1559,7 +1569,7 @@ mod logic {
                     let priv_scope = matches!(scope, Scope::Private);
                     let hist = a.history(priv_scope, &uid);
                     if hist.is_empty() {
-                        event.reply("📭 历史为空");
+                        reply_text(event, "📭 历史为空");
                         return;
                     }
 
@@ -1586,27 +1596,27 @@ mod logic {
                                         .await
                                 };
                                 match result {
-                                    Ok(_) => event.reply(format!("📤 已导出: {}", fname)),
-                                    Err(e) => event.reply(format!("❌ 上传失败: {}", e)),
+                                    Ok(_) => reply_text(event, format!("📤 已导出: {}", fname)),
+                                    Err(e) => reply_text(event, format!("❌ 上传失败: {}", e)),
                                 }
                             } else {
-                                event.reply("❌ 写入失败");
+                                reply_text(event, "❌ 写入失败");
                             }
                         }
-                        Err(e) => event.reply(format!("❌ 创建文件失败: {}", e)),
+                        Err(e) => reply_text(event, format!("❌ 创建文件失败: {}", e)),
                     }
                 } else {
-                    event.reply(format!("❌ {} 不存在", name));
+                    reply_text(event, format!("❌ {} 不存在", name));
                 }
             }
 
             Action::EditAt(scope) => {
                 if cmd.indices.is_empty() {
-                    event.reply("❌ 请指定索引: 智能体'索引 新内容");
+                    reply_text(event, "❌ 请指定索引: 智能体'索引 新内容");
                     return;
                 }
                 if cmd.args.is_empty() {
-                    event.reply("❌ 请提供新内容");
+                    reply_text(event, "❌ 请提供新内容");
                     return;
                 }
                 let idx = cmd.indices[0];
@@ -1615,18 +1625,18 @@ mod logic {
                     let priv_scope = matches!(scope, Scope::Private);
                     if a.edit_at(priv_scope, &uid, idx, &cmd.args) {
                         mgr.save(&c);
-                        event.reply(format!("✏️ 已编辑第 {} 条", idx));
+                        reply_text(event, format!("✏️ 已编辑第 {} 条", idx));
                     } else {
-                        event.reply(format!("❌ 索引 {} 无效", idx));
+                        reply_text(event, format!("❌ 索引 {} 无效", idx));
                     }
                 } else {
-                    event.reply(format!("❌ {} 不存在", name));
+                    reply_text(event, format!("❌ {} 不存在", name));
                 }
             }
 
             Action::DeleteAt(scope) => {
                 if cmd.indices.is_empty() {
-                    event.reply("❌ 请指定索引: 智能体-索引 (支持 1,3,5 或 1-5)");
+                    reply_text(event, "❌ 请指定索引: 智能体-索引 (支持 1,3,5 或 1-5)");
                     return;
                 }
                 let mut c = mgr.config.write().await;
@@ -1634,7 +1644,7 @@ mod logic {
                     let priv_scope = matches!(scope, Scope::Private);
                     let deleted = a.delete_at(priv_scope, &uid, &cmd.indices);
                     if deleted.is_empty() {
-                        event.reply("❌ 索引无效");
+                        reply_text(event, "❌ 索引无效");
                     } else {
                         mgr.save(&c);
                         let s = deleted
@@ -1642,10 +1652,13 @@ mod logic {
                             .map(|i| i.to_string())
                             .collect::<Vec<_>>()
                             .join(", ");
-                        event.reply(format!("🗑️ 已删除第 {} 条 (共{}条)", s, deleted.len()));
+                        reply_text(
+                            event,
+                            format!("🗑️ 已删除第 {} 条 (共{}条)", s, deleted.len()),
+                        );
                     }
                 } else {
-                    event.reply(format!("❌ {} 不存在", name));
+                    reply_text(event, format!("❌ {} 不存在", name));
                 }
             }
 
@@ -1662,9 +1675,9 @@ mod logic {
                     a.clear_history(priv_scope, &uid);
                     a.generation_id += 1;
                     mgr.save(&c);
-                    event.reply(format!("🔥 {} {}历史已清空", name, s));
+                    reply_text(event, format!("🧹 {} {}历史已清空", name, s));
                 } else {
-                    event.reply(format!("❌ {} 不存在", name));
+                    reply_text(event, format!("❌ {} 不存在", name));
                 }
             }
 
@@ -1680,7 +1693,7 @@ mod logic {
                     a.generation_id += 1;
                 }
                 mgr.save(&c);
-                event.reply(format!("🧹 已清空 {} 个智能体的公有历史", cnt));
+                reply_text(event, format!("🧹 已清空 {} 个智能体的公有历史", cnt));
             }
 
             Action::ClearEverything => {
@@ -1697,7 +1710,7 @@ mod logic {
                     a.generation_id += 1;
                 }
                 mgr.save(&c);
-                event.reply(format!("☢️ 已清空 {} 个智能体的所有历史", cnt));
+                reply_text(event, format!("⚠️ 已清空 {} 个智能体的所有历史", cnt));
             }
 
             Action::Help => {
@@ -1796,7 +1809,10 @@ mod logic {
             }
             let updated_model = a.model.clone();
             mgr.save(&c);
-            event.reply(format!("📝 已更新 {} (模型: {})", name, updated_model));
+            reply_text(
+                event,
+                format!("📝 已更新 {} (模型: {})", name, updated_model),
+            );
         } else {
             let description = if desc.is_empty() {
                 "新建智能体".to_string()
@@ -1806,13 +1822,14 @@ mod logic {
             c.agents
                 .push(Agent::new(name, &model, &prompt, &description));
             mgr.save(&c);
-            event.reply(format!("✨ 已创建 {} (模型: {})", name, model));
+            reply_text(event, format!("🤖 已创建 {} (模型: {})", name, model));
         }
     }
 }
 
-use cdp_html_shot::Browser;
 // --- 入口 ---
+use crate::logic::reply_text;
+use cdp_html_shot::Browser;
 use kovi::PluginBuilder;
 use std::sync::Arc;
 
@@ -1842,10 +1859,10 @@ async fn main() {
                 c.api_key = key;
                 mgr.save(&c);
                 drop(c);
-                event.reply(format!("✅ API 已配置: {}", url));
+                reply_text(&event, format!("✅ API 已配置: {}", url));
                 match mgr.fetch_models().await {
-                    Ok(models) => event.reply(format!("📋 已获取 {} 个模型", models.len())),
-                    Err(e) => event.reply(format!("⚠️ 获取模型失败: {}", e)),
+                    Ok(models) => reply_text(&event, format!("📋 已获取 {} 个模型", models.len())),
+                    Err(e) => reply_text(&event, format!("⚠️ 获取模型失败: {}", e)),
                 }
                 return;
             }
