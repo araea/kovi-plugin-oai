@@ -1234,16 +1234,17 @@ mod logic {
                             content.clone()
                         };
 
-                        if ctx.cmd.text_mode && !image_urls.is_empty() {
+                        let reply_text_content = if ctx.cmd.text_mode && !image_urls.is_empty() {
                             let re = Regex::new(r"!\[.*?\]\((https?://[^\s\)]+)\)").unwrap();
-                            let text = re.replace_all(content, "$1").to_string();
-
-                            reply(ctx.event, &text, true, &header).await;
-                            for url in &image_urls {
-                                ctx.event.reply(Message::new().add_image(url));
-                            }
+                            re.replace_all(content, "$1").to_string()
                         } else {
-                            reply(ctx.event, &display_content, ctx.cmd.text_mode, &header).await;
+                            display_content.clone()
+                        };
+
+                        reply(ctx.event, &reply_text_content, ctx.cmd.text_mode, &header).await;
+
+                        for url in &image_urls {
+                            ctx.event.reply(Message::new().add_image(url));
                         }
                     }
                 }
@@ -1541,6 +1542,8 @@ mod logic {
                     let priv_scope = matches!(scope, Scope::Private);
                     let hist = a.history(priv_scope, &uid);
                     let mut results = Vec::new();
+                    let mut extra_images = Vec::new(); // 用于收集需要独立发送的图片
+
                     for i in &cmd.indices {
                         if *i > 0 && *i <= hist.len() {
                             let m = &hist[i - 1];
@@ -1549,12 +1552,31 @@ mod logic {
                                 "assistant" => "🤖",
                                 _ => "❓",
                             };
-                            results.push(format!("**#{} {}**\n{}", i, emoji, m.content));
+
+                            // 处理内容
+                            let mut content = m.content.clone();
+                            // 提取内容中的 markdown 图片
+                            let mut msg_imgs = extract_image_urls(&content);
+                            // 合并该消息自带的图片（如用户上传的）
+                            msg_imgs.extend(m.images.clone());
+
+                            // 文本模式下，将 markdown 图片语法仅保留 url
+                            if cmd.text_mode {
+                                let re = Regex::new(r"!\[.*?\]\((https?://[^\s\)]+)\)").unwrap();
+                                content = re.replace_all(&content, "$1").to_string();
+                            }
+
+                            // 收集图片
+                            extra_images.extend(msg_imgs);
+
+                            results.push(format!("**#{} {}**\n{}", i, emoji, content));
                         }
                     }
+
                     if results.is_empty() {
                         reply_text(event, "❌ 索引无效");
                     } else {
+                        // 发送历史记录主体
                         reply(
                             event,
                             &results.join("\n\n---\n\n"),
@@ -1562,6 +1584,11 @@ mod logic {
                             &format!("{} 历史记录", name),
                         )
                         .await;
+
+                        // 随后独立发送相关图片
+                        for url in extra_images {
+                            event.reply(Message::new().add_image(&url));
+                        }
                     }
                 } else {
                     reply_text(event, format!("❌ {} 不存在", name));
