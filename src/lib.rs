@@ -1798,6 +1798,7 @@ mod logic {
     }
 }
 
+use cdp_html_shot::Browser;
 // --- 入口 ---
 use kovi::PluginBuilder;
 use std::sync::Arc;
@@ -1872,6 +1873,20 @@ async fn main() {
                     cmd.args.clone()
                 };
                 logic::execute(cmd, prompt, imgs, &event, &mgr, &bot).await;
+            }
+        }
+    });
+
+    let mgr_drop = mgr.clone();
+    PluginBuilder::drop({
+        move || {
+            let mgr = mgr_drop.clone();
+            async move {
+                // 保存配置
+                let c = mgr.config.read().await;
+                mgr.save(&c);
+                // 关闭全局浏览器实例
+                Browser::instance().await.close_async().await.unwrap();
             }
         }
     });
