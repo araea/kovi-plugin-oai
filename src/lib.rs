@@ -239,9 +239,10 @@ mod utils {
 
     /// 解析索引 (1, 1-5, 1,3,5)
     pub fn parse_indices(s: &str) -> Vec<usize> {
+        let s = s.replace('，', ",");
         let re = RE_IDX.get_or_init(|| Regex::new(r"(\d+)(?:-(\d+))?").unwrap());
         let mut v = Vec::new();
-        for c in re.captures_iter(s) {
+        for c in re.captures_iter(&s) {
             if let Some(start) = c.get(1).and_then(|m| m.as_str().parse().ok()) {
                 if let Some(end) = c.get(2).and_then(|m| m.as_str().parse().ok()) {
                     v.extend(start..=end);
@@ -1214,13 +1215,10 @@ mod logic {
                         };
 
                         if ctx.cmd.text_mode && !image_urls.is_empty() {
-                            let urls_text = image_urls
-                                .iter()
-                                .map(|u| u.to_string())
-                                .collect::<Vec<_>>()
-                                .join("\n\n");
-                            let text_with_urls = format!("{}\n\n{}", content, urls_text);
-                            reply(ctx.event, &text_with_urls, true, &header).await;
+                            let re = Regex::new(r"!\[.*?\]\((https?://[^\s\)]+)\)").unwrap();
+                            let text = re.replace_all(content, "$1").to_string();
+
+                            reply(ctx.event, &text, true, &header).await;
                             for url in &image_urls {
                                 ctx.event.reply(Message::new().add_image(url));
                             }
