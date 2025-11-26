@@ -591,7 +591,7 @@ mod parser {
             return Some(Command::new("", Action::Help));
         }
 
-        if norm == "/" {
+        if norm == "/#" {
             return Some(Command::new("", Action::List));
         }
 
@@ -612,17 +612,22 @@ mod parser {
 
     pub fn parse_create(raw: &str) -> Option<(String, String, String, String)> {
         let norm = normalize(raw.trim());
-        if !norm.starts_with("#") {
+        if !norm.starts_with("##") {
             return None;
         }
 
-        let after = &raw.trim()[norm.find("#").unwrap() + "#".len()..];
+        let start_pos = norm.find("##").unwrap() + "##".len();
+        let after = &raw.trim()[start_pos..];
 
         let name_end = after
             .find(|c: char| c.is_whitespace() || c == '(' || c == '（')
             .unwrap_or(after.len());
         let name = after[..name_end].trim().to_string();
-        if name.is_empty() {
+
+        if name.is_empty()
+            || name.chars().count() > 7
+            || name.chars().any(|c| "&\"#~/ -_'!@$%:*".contains(c))
+        {
             return None;
         }
 
@@ -1290,6 +1295,14 @@ mod logic {
                     event.reply("❌ 请指定新名称: 智能体~#新名称");
                     return;
                 }
+
+                if cmd.args.chars().count() > 7
+                    || cmd.args.chars().any(|c| "&\"#~/ -_'!@$%:*".contains(c))
+                {
+                    event.reply("❌ 名称限制：最多7字且不能包含指令符号");
+                    return;
+                }
+
                 let mut c = mgr.config.write().await;
                 if c.agents.iter().any(|a| a.name == cmd.args) {
                     event.reply(format!("❌ {} 已存在", cmd.args));
@@ -1697,11 +1710,11 @@ mod logic {
 ## 智能体管理
 | 指令 | 功能 | 示例 |
 |------|------|------|
-| `#名称 模型 提示词` | 创建/更新 | `#助手 gpt-4o 你是助手` |
+| `##名称 模型 提示词` | 创建/更新 | `##助手 gpt-4o 你是助手` |
 | `智能体~#新名` | 复制 | `助手~#助手2` |
 | `智能体:描述` | 设置描述 | `助手:通用助手` |
 | `-#名称` | 删除 | `-#助手` |
-| `/` | 列表 | `/` |
+| `/#` | 列表 | `/#` |
 
 ## 配置修改
 | 指令 | 功能 | 示例 |
