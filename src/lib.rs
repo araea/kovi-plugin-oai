@@ -766,8 +766,13 @@ mod parser {
             return (Action::Stop, String::new(), vec![]);
         }
 
-        if s.starts_with("~#") {
-            let arg = r.get(2..).unwrap_or("").trim();
+        if s.starts_with("~#") || s.starts_with("~＃") {
+            let skip_len = if r.starts_with("~＃") {
+                "～＃".chars().map(|c| c.len_utf8()).sum()
+            } else {
+                "~#".chars().map(|c| c.len_utf8()).sum()
+            };
+            let arg = r.get(skip_len..).unwrap_or("").trim();
             return (Action::Copy, arg.to_string(), vec![]);
         }
 
@@ -776,9 +781,9 @@ mod parser {
             && !s.starts_with("：/")
         {
             let skip_len = if r.starts_with('：') {
-                '：'.len_utf8() // 3 bytes for Chinese full-width colon
+                '：'.len_utf8()
             } else {
-                ':'.len_utf8() // 1 byte for ASCII colon
+                ':'.len_utf8()
             };
             let arg = r.get(skip_len..).unwrap_or("").trim();
             return (Action::SetDesc, arg.to_string(), vec![]);
