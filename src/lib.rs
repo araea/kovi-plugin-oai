@@ -1,4 +1,4 @@
-//! kovi-plugin-openai-chat
+//! kovi-plugin-oai
 //!
 //! 符号指令系统 AI 聊天插件
 //!
