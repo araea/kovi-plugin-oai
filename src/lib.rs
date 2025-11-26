@@ -358,7 +358,6 @@ mod utils {
 
         tab.set_content(&html).await?;
 
-        // 等待渲染
         time::sleep(Duration::from_millis(200)).await;
 
         // 2. 获取实际内容高度并调整视口
