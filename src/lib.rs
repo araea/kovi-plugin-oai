@@ -728,7 +728,7 @@ mod parser {
 
         let parts: Vec<&str> = after_desc.split_whitespace().collect();
         let model = parts.first().unwrap_or(&"").to_string();
-        if model.chars().count() > 32 {
+        if model.chars().count() > 50 {
             return None;
         }
         let prompt = if parts.len() > 1 {
