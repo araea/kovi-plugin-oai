@@ -2439,7 +2439,7 @@ async fn main() {
                 mgr.save(&c);
                 // 关闭全局浏览器实例
                 // Browser::instance().await.close_async().await.unwrap();
-                cdp_html_shot::Browser::shutdown_global().await;
+                Browser::shutdown_global().await;
             }
         }
     });
