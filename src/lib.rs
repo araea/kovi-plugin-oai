@@ -2438,7 +2438,8 @@ async fn main() {
                 let c = mgr.config.read().await;
                 mgr.save(&c);
                 // 关闭全局浏览器实例
-                Browser::instance().await.close_async().await.unwrap();
+                // Browser::instance().await.close_async().await.unwrap();
+                cdp_html_shot::Browser::shutdown_global().await;
             }
         }
     });
