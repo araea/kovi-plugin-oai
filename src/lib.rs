@@ -728,6 +728,9 @@ mod parser {
 
         let parts: Vec<&str> = after_desc.split_whitespace().collect();
         let model = parts.first().unwrap_or(&"").to_string();
+        if model.chars().count() > 32 {
+            return None;
+        }
         let prompt = if parts.len() > 1 {
             parts[1..].join(" ")
         } else {
@@ -2043,6 +2046,7 @@ mod logic {
 | 指令 | 功能 | 示例 |
 |------|------|------|
 | `##名称 模型 提示词` | 创建/更新 | `##助手 gpt-4o 你是助手` |
+| `##:模型` | 批量生成描述 | `##:gpt-4o` |
 | `智能体~=新名` | 重命名 | `助手~=管家` |
 | `智能体~#新名` | 复制 | `助手~#助手2` |
 | `智能体:描述` | 设置描述 | `助手:通用助手` |
