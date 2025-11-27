@@ -1132,12 +1132,19 @@ mod logic {
 
     fn extract_image_urls(content: &str) -> Vec<String> {
         let re = Regex::new(
-                r"!\[.*?\]\(((?:https?://|data:image/)[^\s\)]+)\)|(?:https?://[^\s]+\.(?:png|jpg|jpeg|gif|webp|bmp))",
-            )
-            .unwrap();
-        re.captures_iter(content)
+                    r"!\[.*?\]\(((?:https?://|data:image/)[^\s\)]+)\)|(?:https?://[^\s]+\.(?:png|jpg|jpeg|gif|webp|bmp))",
+                )
+                .unwrap();
+
+        let mut urls: Vec<String> = re
+            .captures_iter(content)
             .filter_map(|cap| cap.get(1).or(cap.get(0)).map(|m| m.as_str().to_string()))
-            .collect()
+            .collect();
+
+        let mut seen = std::collections::HashSet::new();
+        urls.retain(|url| seen.insert(url.clone()));
+
+        urls
     }
 
     fn extract_video_urls(content: &str) -> Vec<String> {
