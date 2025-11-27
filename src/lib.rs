@@ -1208,10 +1208,18 @@ mod logic {
                 return;
             }
 
-            let _ = ctx
+            match ctx
                 .bot
-                .set_msg_emoji_like(ctx.event.message_id.into(), "👌")
-                .await;
+                .set_msg_emoji_like(ctx.event.message_id.into(), "124")
+                .await
+            {
+                Ok(_) => {
+                    // kovi::log::info!("点赞成功");
+                }
+                Err(e) => {
+                    kovi::log::error!("点赞失败: {:?}", e);
+                }
+            }
 
             let mut hist = agent.history(is_priv_ctx, &uid).to_vec();
 
