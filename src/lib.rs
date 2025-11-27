@@ -1225,7 +1225,7 @@ mod logic {
                         .into(),
                 );
             }
-
+            let re = Regex::new(r"!\[.*?\]\((data:image/[^\s\)]+)\)").unwrap();
             for m in &hist {
                 if m.role == "user" {
                     let mut parts = Vec::new();
@@ -1258,7 +1258,6 @@ mod logic {
                             .into(),
                     );
                 } else if m.role == "assistant" {
-                    let re = Regex::new(r"!\[.*?\]\((data:image/[^\s\)]+)\)").unwrap();
                     let clean_content = re.replace_all(&m.content, "[Image Created]").to_string();
 
                     msgs.push(
