@@ -186,7 +186,7 @@ mod utils {
     pub static RE_IDX: OnceLock<Regex> = OnceLock::new();
 
     pub const MODEL_KEYWORDS: &[&str] = &[
-        "gpt-5", "claude", "gemini-3", "deepseek", "kimi", "grok-4", "banana",
+        "gpt-5", "claude", "gemini-3", "deepseek", "kimi", "grok-4", "banana", "sora-2",
     ];
 
     /// 全角转半角
@@ -420,6 +420,17 @@ mod utils {
                             imgs.push(u.to_string());
                         }
                     }
+                    "video" => {
+                        // 尝试获取 url 或 file 字段
+                        let url = seg
+                            .data
+                            .get("url")
+                            .or(seg.data.get("file"))
+                            .and_then(|v| v.as_str());
+                        if let Some(u) = url {
+                            imgs.push(u.to_string());
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -437,12 +448,21 @@ mod utils {
             }
         }
 
-        // 2. 提取当前消息中的图片 (文本由 Parser 处理，这里只拿图片)
+        // 2. 提取当前消息中的图片/视频
         for seg in event.message.iter() {
             if seg.type_ == "image"
                 && let Some(u) = seg.data.get("url").and_then(|v| v.as_str())
             {
                 imgs.push(u.to_string());
+            } else if seg.type_ == "video" {
+                let url = seg
+                    .data
+                    .get("url")
+                    .or(seg.data.get("file"))
+                    .and_then(|v| v.as_str());
+                if let Some(u) = url {
+                    imgs.push(u.to_string());
+                }
             }
         }
 
@@ -1120,6 +1140,15 @@ mod logic {
             .collect()
     }
 
+    fn extract_video_urls(content: &str) -> Vec<String> {
+        // 匹配 [download video](url)
+        let re = Regex::new(r"\[download video\]\((https?://[^\s\)]+)\)").unwrap();
+        re.captures_iter(content)
+            .filter_map(|cap| cap.get(1).map(|m| m.as_str().to_string()))
+            .collect()
+    }
+
+    #[allow(clippy::too_many_arguments)]
     async fn chat(
         name: &str,
         prompt: &str,
@@ -1128,6 +1157,7 @@ mod logic {
         cmd: &Command,
         event: &Arc<kovi::MsgEvent>,
         mgr: &Arc<Manager>,
+        bot: &Arc<kovi::RuntimeBot>,
     ) {
         struct ChatContext<'a> {
             name: &'a str,
@@ -1137,6 +1167,7 @@ mod logic {
             cmd: &'a Command,
             event: &'a Arc<kovi::MsgEvent>,
             mgr: &'a Arc<Manager>,
+            bot: &'a Arc<kovi::RuntimeBot>,
         }
 
         async fn inner(ctx: ChatContext<'_>) {
@@ -1169,6 +1200,11 @@ mod logic {
                 reply_text(ctx.event, "❌ API 未配置");
                 return;
             }
+
+            let _ = ctx
+                .bot
+                .set_msg_emoji_like(ctx.event.message_id.into(), "👌")
+                .await;
 
             let mut hist = agent.history(is_priv_ctx, &uid).to_vec();
 
@@ -1208,14 +1244,8 @@ mod logic {
                 generating.set_generating(ctx.name, is_priv_ctx, &uid, true);
             }
 
-            let http_client = reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(180)) // 3分钟超时
-                .build()
-                .unwrap_or_default();
-
             let client =
-                Client::with_config(OpenAIConfig::new().with_api_base(api.0).with_api_key(api.1))
-                    .with_http_client(http_client);
+                Client::with_config(OpenAIConfig::new().with_api_base(api.0).with_api_key(api.1));
 
             let mut msgs: Vec<ChatCompletionRequestMessage> = vec![];
 
@@ -1270,6 +1300,27 @@ mod logic {
                             .unwrap()
                             .into(),
                     );
+
+                    let gen_imgs = extract_image_urls(&m.content);
+                    if !gen_imgs.is_empty() {
+                        let mut img_parts = Vec::new();
+                        for url in gen_imgs {
+                            img_parts.push(
+                                ChatCompletionRequestMessageContentPartImageArgs::default()
+                                    .image_url(ImageUrlArgs::default().url(url).build().unwrap())
+                                    .build()
+                                    .unwrap()
+                                    .into(),
+                            );
+                        }
+                        msgs.push(
+                            ChatCompletionRequestUserMessageArgs::default()
+                                .content(img_parts)
+                                .build()
+                                .unwrap()
+                                .into(),
+                        );
+                    }
                 }
             }
 
@@ -1287,116 +1338,152 @@ mod logic {
                 }
             };
 
-            match client.chat().create(req).await {
-                Ok(res) => {
+            match kovi::tokio::time::timeout(
+                std::time::Duration::from_secs(300),
+                client.chat().create(req),
+            )
+            .await
+            {
+                // 情况 1: 触发超时 (超过 5 分钟)
+                Err(_) => {
                     {
                         let mut generating = ctx.mgr.generating.write().await;
                         generating.set_generating(ctx.name, is_priv_ctx, &uid, false);
                     }
-
-                    {
-                        let c = ctx.mgr.config.read().await;
-                        if let Some(a) = c.agents.iter().find(|a| a.name == ctx.name)
-                            && a.generation_id != gen_id
+                    reply_text(
+                        ctx.event,
+                        "⏳ 请求超时：模型响应时间超过 5 分钟，已强制停止。",
+                    );
+                }
+                // 情况 2: 请求在限时内完成 (包含 成功响应 或 API报错)
+                Ok(result) => match result {
+                    Ok(res) => {
                         {
-                            return;
+                            let mut generating = ctx.mgr.generating.write().await;
+                            generating.set_generating(ctx.name, is_priv_ctx, &uid, false);
                         }
-                    }
 
-                    if let Some(choice) = res.choices.first()
-                        && let Some(content) = &choice.message.content
-                    {
-                        let msg_index = {
+                        {
                             let c = ctx.mgr.config.read().await;
-                            if let Some(a) = c.agents.iter().find(|a| a.name == ctx.name) {
-                                a.history(is_priv_ctx, &uid).len() + 1
-                            } else {
-                                0
+                            if let Some(a) = c.agents.iter().find(|a| a.name == ctx.name)
+                                && a.generation_id != gen_id
+                            {
+                                return;
                             }
-                        };
-
-                        {
-                            let mut c = ctx.mgr.config.write().await;
-                            if let Some(a) = c.agents.iter_mut().find(|a| a.name == ctx.name) {
-                                a.history_mut(is_priv_ctx, &uid).push(ChatMessage::new(
-                                    "assistant",
-                                    content,
-                                    vec![],
-                                ));
-                            }
-                            ctx.mgr.save(&c);
                         }
 
-                        let image_urls = extract_image_urls(content);
+                        if let Some(choice) = res.choices.first()
+                            && let Some(content) = &choice.message.content
+                        {
+                            let msg_index = {
+                                let c = ctx.mgr.config.read().await;
+                                if let Some(a) = c.agents.iter().find(|a| a.name == ctx.name) {
+                                    a.history(is_priv_ctx, &uid).len() + 1
+                                } else {
+                                    0
+                                }
+                            };
 
-                        let header = format!(
-                            "{} #{}回复{}",
-                            agent.name,
-                            msg_index,
-                            if ctx.cmd.private_reply {
-                                " (私有)"
-                            } else {
-                                ""
+                            {
+                                let mut c = ctx.mgr.config.write().await;
+                                if let Some(a) = c.agents.iter_mut().find(|a| a.name == ctx.name) {
+                                    a.history_mut(is_priv_ctx, &uid).push(ChatMessage::new(
+                                        "assistant",
+                                        content,
+                                        vec![],
+                                    ));
+                                }
+                                ctx.mgr.save(&c);
                             }
-                        );
 
-                        let display_content = if !image_urls.is_empty() && !ctx.cmd.text_mode {
-                            let urls_text = image_urls
-                                .iter()
-                                .map(|u| {
-                                    if u.starts_with("data:") {
-                                        "- [Base64 Image]".to_string()
+                            let image_urls = extract_image_urls(content);
+
+                            let header = format!(
+                                "{} #{}回复{}",
+                                agent.name,
+                                msg_index,
+                                if ctx.cmd.private_reply {
+                                    " (私有)"
+                                } else {
+                                    ""
+                                }
+                            );
+
+                            let display_content = if !image_urls.is_empty() && !ctx.cmd.text_mode {
+                                let urls_text = image_urls
+                                    .iter()
+                                    .map(|u| {
+                                        if u.starts_with("data:") {
+                                            "- [Base64 Image]".to_string()
+                                        } else {
+                                            format!("- {}", u)
+                                        }
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join("\n");
+                                format!("{}\n\n---\n**图片链接:**\n{}", content, urls_text)
+                            } else {
+                                content.clone()
+                            };
+
+                            let reply_text_content = if ctx.cmd.text_mode && !image_urls.is_empty()
+                            {
+                                // 使用与 extract_image_urls 相同的逻辑替换
+                                let re =
+                                    Regex::new(r"!\[.*?\]\(((?:https?://|data:image/)[^\s\)]+)\)")
+                                        .unwrap();
+                                re.replace_all(content, |caps: &regex::Captures| {
+                                    let url = &caps[1];
+                                    if url.starts_with("data:") {
+                                        "[图片]".to_string()
                                     } else {
-                                        format!("- {}", u)
+                                        url.to_string()
                                     }
                                 })
-                                .collect::<Vec<_>>()
-                                .join("\n");
-                            format!("{}\n\n---\n**图片链接:**\n{}", content, urls_text)
-                        } else {
-                            content.clone()
-                        };
-
-                        let reply_text_content = if ctx.cmd.text_mode && !image_urls.is_empty() {
-                            // 使用与 extract_image_urls 相同的逻辑替换
-                            let re = Regex::new(r"!\[.*?\]\(((?:https?://|data:image/)[^\s\)]+)\)")
-                                .unwrap();
-                            re.replace_all(content, |caps: &regex::Captures| {
-                                let url = &caps[1];
-                                if url.starts_with("data:") {
-                                    "[图片]".to_string()
-                                } else {
-                                    url.to_string()
-                                }
-                            })
-                            .to_string()
-                        } else {
-                            display_content.clone()
-                        };
-
-                        reply(ctx.event, &reply_text_content, ctx.cmd.text_mode, &header).await;
-
-                        for url in &image_urls {
-                            if url.starts_with("data:") {
-                                if let Some(base64_data) = url.split(',').nth(1) {
-                                    ctx.event.reply(
-                                        Message::new()
-                                            .add_image(&format!("base64://{}", base64_data)),
-                                    );
-                                }
+                                .to_string()
                             } else {
-                                ctx.event.reply(Message::new().add_image(url));
+                                display_content.clone()
+                            };
+
+                            reply(ctx.event, &reply_text_content, ctx.cmd.text_mode, &header).await;
+
+                            for url in &image_urls {
+                                if url.starts_with("data:") {
+                                    if let Some(base64_data) = url.split(',').nth(1) {
+                                        ctx.event.reply(
+                                            Message::new()
+                                                .add_image(&format!("base64://{}", base64_data)),
+                                        );
+                                    }
+                                } else {
+                                    ctx.event.reply(Message::new().add_image(url));
+                                }
+                            }
+
+                            let video_urls = extract_video_urls(content);
+                            for url in video_urls {
+                                // 使用 OneBot 标准 video 段发送，data 放 file 字段，框架会自动处理下载/转发
+                                let mut vec = Vec::new();
+                                let segment = kovi::bot::message::Segment::new(
+                                    "video",
+                                    kovi::serde_json::json!({
+                                        "file": url
+                                    }),
+                                );
+                                vec.push(segment);
+                                let msg = kovi::bot::message::Message::from(vec);
+                                ctx.event.reply(msg);
                             }
                         }
                     }
-                }
-                Err(e) => {
-                    {
-                        let mut generating = ctx.mgr.generating.write().await;
-                        generating.set_generating(ctx.name, is_priv_ctx, &uid, false);
+                    Err(e) => {
+                        {
+                            let mut generating = ctx.mgr.generating.write().await;
+                            generating.set_generating(ctx.name, is_priv_ctx, &uid, false);
+                        }
+                        reply_text(ctx.event, format!("❌ API错误: {}", e));
                     }
-                    reply_text(ctx.event, format!("❌ API错误: {}", e));
-                }
+                },
             }
         }
 
@@ -1408,6 +1495,7 @@ mod logic {
             cmd,
             event,
             mgr,
+            bot,
         })
         .await;
     }
@@ -1425,11 +1513,11 @@ mod logic {
 
         match cmd.action {
             Action::Chat => {
-                chat(name, &prompt, imgs, false, &cmd, event, mgr).await;
+                chat(name, &prompt, imgs, false, &cmd, event, mgr, bot).await;
             }
 
             Action::Regenerate => {
-                chat(name, &cmd.args, imgs, true, &cmd, event, mgr).await;
+                chat(name, &cmd.args, imgs, true, &cmd, event, mgr, bot).await;
             }
 
             Action::Stop => {
