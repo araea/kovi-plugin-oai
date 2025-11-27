@@ -456,6 +456,8 @@ mod utils {
         offset: usize,
         text_mode: bool,
     ) -> String {
+        let re = Regex::new(r"!\[.*?\]\((data:image/[^\s\)]+)\)").unwrap();
+
         hist.iter()
             .enumerate()
             .map(|(i, m)| {
@@ -477,6 +479,10 @@ mod utils {
 
                 let mut body = m.content.clone();
 
+                if text_mode {
+                    body = re.replace_all(&body, "[图片]").to_string();
+                }
+
                 if !m.images.is_empty() {
                     if !body.is_empty() {
                         body.push_str("\n\n");
@@ -486,7 +492,13 @@ mod utils {
                         let links = m
                             .images
                             .iter()
-                            .map(|u| format!("- [图片] {}", u))
+                            .map(|u| {
+                                if u.starts_with("data:") {
+                                    "- [Base64 Image]".to_string()
+                                } else {
+                                    format!("- [图片] {}", u)
+                                }
+                            })
                             .collect::<Vec<_>>()
                             .join("\n");
                         body.push_str(&links);
@@ -527,6 +539,8 @@ mod utils {
         scope: &str,
         hist: &[super::types::ChatMessage],
     ) -> String {
+        let re = Regex::new(r"!\[.*?\]\((data:image/[^\s\)]+)\)").unwrap();
+
         let mut content = String::new();
         let separator = "─".repeat(40);
         let thin_sep = "┄".repeat(40);
@@ -564,13 +578,19 @@ mod utils {
 
             content.push_str(&format!("【#{} {} | {}】\n", i + 1, role_name, time));
             content.push_str(&format!("{}\n", thin_sep));
-            content.push_str(&m.content);
+
+            let clean_content = re.replace_all(&m.content, "[图片数据]");
+            content.push_str(&clean_content);
             content.push('\n');
 
             if !m.images.is_empty() {
                 content.push_str(&format!("\n📷 附图 ({} 张):\n", m.images.len()));
                 for (j, url) in m.images.iter().enumerate() {
-                    content.push_str(&format!("   {}. {}\n", j + 1, url));
+                    if url.starts_with("data:") {
+                        content.push_str(&format!("   {}. [Base64 Image Data]\n", j + 1));
+                    } else {
+                        content.push_str(&format!("   {}. {}\n", j + 1, url));
+                    }
                 }
             }
 
@@ -1079,15 +1099,19 @@ mod logic {
         }
         match render_md(text, header).await {
             Ok(b64) => event.reply(msg.add_image(&format!("base64://{}", b64))),
-            Err(_) => event.reply(msg.add_text(text)),
+            Err(_) => {
+                let re = Regex::new(r"!\[.*?\]\((data:image/[^\s\)]+)\)").unwrap();
+                let clean_text = re.replace_all(text, "[图片渲染失败]").to_string();
+                event.reply(msg.add_text(&clean_text));
+            }
         }
     }
 
     fn extract_image_urls(content: &str) -> Vec<String> {
         let re = Regex::new(
-            r"!\[.*?\]\((https?://[^\s\)]+)\)|(?:https?://[^\s]+\.(?:png|jpg|jpeg|gif|webp|bmp))",
-        )
-        .unwrap();
+                r"!\[.*?\]\(((?:https?://|data:image/)[^\s\)]+)\)|(?:https?://[^\s]+\.(?:png|jpg|jpeg|gif|webp|bmp))",
+            )
+            .unwrap();
         re.captures_iter(content)
             .filter_map(|cap| cap.get(1).or(cap.get(0)).map(|m| m.as_str().to_string()))
             .collect()
@@ -1181,8 +1205,14 @@ mod logic {
                 generating.set_generating(ctx.name, is_priv_ctx, &uid, true);
             }
 
+            let http_client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(180)) // 3分钟超时
+                .build()
+                .unwrap_or_default();
+
             let client =
-                Client::with_config(OpenAIConfig::new().with_api_base(api.0).with_api_key(api.1));
+                Client::with_config(OpenAIConfig::new().with_api_base(api.0).with_api_key(api.1))
+                    .with_http_client(http_client);
 
             let mut msgs: Vec<ChatCompletionRequestMessage> = vec![];
 
@@ -1228,9 +1258,12 @@ mod logic {
                             .into(),
                     );
                 } else if m.role == "assistant" {
+                    let re = Regex::new(r"!\[.*?\]\((data:image/[^\s\)]+)\)").unwrap();
+                    let clean_content = re.replace_all(&m.content, "[Image Created]").to_string();
+
                     msgs.push(
                         ChatCompletionRequestAssistantMessageArgs::default()
-                            .content(m.content.clone())
+                            .content(clean_content)
                             .build()
                             .unwrap()
                             .into(),
@@ -1308,7 +1341,13 @@ mod logic {
                         let display_content = if !image_urls.is_empty() && !ctx.cmd.text_mode {
                             let urls_text = image_urls
                                 .iter()
-                                .map(|u| format!("- {}", u))
+                                .map(|u| {
+                                    if u.starts_with("data:") {
+                                        "- [Base64 Image]".to_string()
+                                    } else {
+                                        format!("- {}", u)
+                                    }
+                                })
                                 .collect::<Vec<_>>()
                                 .join("\n");
                             format!("{}\n\n---\n**图片链接:**\n{}", content, urls_text)
@@ -1317,8 +1356,18 @@ mod logic {
                         };
 
                         let reply_text_content = if ctx.cmd.text_mode && !image_urls.is_empty() {
-                            let re = Regex::new(r"!\[.*?\]\((https?://[^\s\)]+)\)").unwrap();
-                            re.replace_all(content, "$1").to_string()
+                            // 使用与 extract_image_urls 相同的逻辑替换
+                            let re = Regex::new(r"!\[.*?\]\(((?:https?://|data:image/)[^\s\)]+)\)")
+                                .unwrap();
+                            re.replace_all(content, |caps: &regex::Captures| {
+                                let url = &caps[1];
+                                if url.starts_with("data:") {
+                                    "[图片]".to_string()
+                                } else {
+                                    url.to_string()
+                                }
+                            })
+                            .to_string()
                         } else {
                             display_content.clone()
                         };
@@ -1326,7 +1375,16 @@ mod logic {
                         reply(ctx.event, &reply_text_content, ctx.cmd.text_mode, &header).await;
 
                         for url in &image_urls {
-                            ctx.event.reply(Message::new().add_image(url));
+                            if url.starts_with("data:") {
+                                if let Some(base64_data) = url.split(',').nth(1) {
+                                    ctx.event.reply(
+                                        Message::new()
+                                            .add_image(&format!("base64://{}", base64_data)),
+                                    );
+                                }
+                            } else {
+                                ctx.event.reply(Message::new().add_image(url));
+                            }
                         }
                     }
                 }
@@ -1742,9 +1800,10 @@ mod logic {
                     let priv_scope = matches!(scope, Scope::Private);
                     let hist = a.history(priv_scope, &uid);
                     let mut results = Vec::new();
-                    let mut extra_images = Vec::new(); // 用于收集需要独立发送的图片
+                    let mut extra_images = Vec::new();
 
-                    let re = Regex::new(r"!\[.*?\]\((https?://[^\s\)]+)\)").unwrap();
+                    let re =
+                        Regex::new(r"!\[.*?\]\(((?:https?://|data:image/)[^\s\)]+)\)").unwrap();
 
                     for i in &cmd.indices {
                         if *i > 0 && *i <= hist.len() {
@@ -1760,23 +1819,35 @@ mod logic {
                             msg_imgs.extend(m.images.clone());
 
                             if cmd.text_mode {
-                                content = re.replace_all(&content, "$1").to_string();
+                                content = re
+                                    .replace_all(&content, |caps: &regex::Captures| {
+                                        let url = &caps[1];
+                                        if url.starts_with("data:") {
+                                            "[图片]".to_string()
+                                        } else {
+                                            url.to_string()
+                                        }
+                                    })
+                                    .to_string();
                             }
 
                             if !m.images.is_empty() {
                                 if !content.is_empty() {
-                                    content.push_str("\n\n"); // 强制换段
+                                    content.push_str("\n\n");
                                 }
                                 for url in &m.images {
                                     if cmd.text_mode {
-                                        content.push_str(&format!("\n- {}", url));
+                                        if url.starts_with("data:") {
+                                            content.push_str("\n- [Base64 Image]");
+                                        } else {
+                                            content.push_str(&format!("\n- {}", url));
+                                        }
                                     } else {
                                         content.push_str(&format!("\n![image]({})", url));
                                     }
                                 }
                             }
 
-                            // 收集图片
                             extra_images.extend(msg_imgs);
 
                             results.push(format!("**#{} {}**\n{}", i, emoji, content));
@@ -1786,7 +1857,6 @@ mod logic {
                     if results.is_empty() {
                         reply_text(event, "❌ 索引无效");
                     } else {
-                        // 发送历史记录主体
                         reply(
                             event,
                             &results.join("\n\n---\n\n"),
@@ -1795,9 +1865,17 @@ mod logic {
                         )
                         .await;
 
-                        // 随后独立发送相关图片
                         for url in extra_images {
-                            event.reply(Message::new().add_image(&url));
+                            if url.starts_with("data:") {
+                                if let Some(base64_data) = url.split(',').nth(1) {
+                                    event.reply(
+                                        Message::new()
+                                            .add_image(&format!("base64://{}", base64_data)),
+                                    );
+                                }
+                            } else {
+                                event.reply(Message::new().add_image(&url));
+                            }
                         }
                     }
                 } else {
@@ -1957,62 +2035,62 @@ mod logic {
 
             Action::Help => {
                 let help = r#"## 模式前缀（可组合）
-    | 符号 | 含义 |
-    |:---:|------|
-    | `&` | 私有模式 |
-    | `"` | 文本模式 |
+| 符号 | 含义 |
+|:---:|------|
+| `&` | 私有模式 |
+| `"` | 文本模式 |
 
-    ## 智能体管理
-    | 指令 | 功能 | 示例 |
-    |------|------|------|
-    | `##名称 模型 提示词` | 创建/更新 | `##助手 gpt-4o 你是助手` |
-    | `智能体~=新名` | 重命名 | `助手~=管家` |
-    | `智能体~#新名` | 复制 | `助手~#助手2` |
-    | `智能体:描述` | 设置描述 | `助手:通用助手` |
-    | `-#名称` | 删除 | `-#助手` |
-    | `/#` | 列表 | `/#` |
+## 智能体管理
+| 指令 | 功能 | 示例 |
+|------|------|------|
+| `##名称 模型 提示词` | 创建/更新 | `##助手 gpt-4o 你是助手` |
+| `智能体~=新名` | 重命名 | `助手~=管家` |
+| `智能体~#新名` | 复制 | `助手~#助手2` |
+| `智能体:描述` | 设置描述 | `助手:通用助手` |
+| `-#名称` | 删除 | `-#助手` |
+| `/#` | 列表 | `/#` |
 
-    ## 配置修改
-    | 指令 | 功能 | 示例 |
-    |------|------|------|
-    | `智能体%模型` | 修改模型 | `助手%gpt-4` |
-    | `智能体$提示词` | 修改提示词 | `助手$你是...` |
-    | `智能体$` | 清空提示词 | `助手$` |
-    | `智能体/$` | 查看提示词 | `助手/$` |
-    | `/%` | 模型列表 | `/%` |
+## 配置修改
+| 指令 | 功能 | 示例 |
+|------|------|------|
+| `智能体%模型` | 修改模型 | `助手%gpt-4` |
+| `智能体$提示词` | 修改提示词 | `助手$你是...` |
+| `智能体$` | 清空提示词 | `助手$` |
+| `智能体/$` | 查看提示词 | `助手/$` |
+| `/%` | 模型列表 | `/%` |
 
-    ## 对话控制
-    | 指令 | 功能 |
-    |------|------|
-    | `智能体 内容` | 对话 |
-    | `"智能体 内容` | 文本模式对话 |
-    | `&智能体 内容` | 私有对话 |
-    | `智能体~` | 重新生成 |
-    | `智能体!` | 停止生成 |
+## 对话控制
+| 指令 | 功能 |
+|------|------|
+| `智能体 内容` | 对话 |
+| `"智能体 内容` | 文本模式对话 |
+| `&智能体 内容` | 私有对话 |
+| `智能体~` | 重新生成 |
+| `智能体!` | 停止生成 |
 
-    ## 历史管理
-    | 指令 | 功能 |
-    |------|------|
-    | `智能体/*` | 查看所有 |
-    | `智能体/1` | 查看第1条 |
-    | `智能体/1-5` | 查看1-5条 |
-    | `智能体_*` | 导出(.txt) |
-    | `智能体'1 新内容` | 编辑第1条 |
-    | `智能体-1` | 删除第1条 |
-    | `智能体-1,3,5` | 删除多条 |
-    | `智能体-1-5` | 删除范围 |
-    | `智能体-*` | 清空历史 |
+## 历史管理
+| 指令 | 功能 |
+|------|------|
+| `智能体/*` | 查看所有 |
+| `智能体/1` | 查看第1条 |
+| `智能体/1-5` | 查看1-5条 |
+| `智能体_*` | 导出(.txt) |
+| `智能体'1 新内容` | 编辑第1条 |
+| `智能体-1` | 删除第1条 |
+| `智能体-1,3,5` | 删除多条 |
+| `智能体-1-5` | 删除范围 |
+| `智能体-*` | 清空历史 |
 
-    > 加 `&` 前缀操作私有历史: `&智能体/*`
+> 加 `&` 前缀操作私有历史: `&智能体/*`
 
-    ## 危险操作
-    | 指令 | 功能 |
-    |------|------|
-    | `-*` | 清空所有智能体公有历史 |
-    | `-*!` | 清空所有历史 |
+## 危险操作
+| 指令 | 功能 |
+|------|------|
+| `-*` | 清空所有智能体公有历史 |
+| `-*!` | 清空所有历史 |
 
-    ## API 配置
-    直接发送: `API地址 API密钥`
+## API 配置
+直接发送: `API地址 API密钥`
     "#;
                 reply(event, help, cmd.text_mode, "🤖 OAI 符号指令帮助").await;
             }
@@ -2107,8 +2185,8 @@ mod logic {
                         }
                     }
 
-                    // 小停顿，避免并发过高 (1.5秒)
-                    kovi::tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+                    // 小停顿，避免并发过高 (100毫秒)
+                    kovi::tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 }
 
                 reply_text(
