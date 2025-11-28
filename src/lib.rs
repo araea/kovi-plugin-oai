@@ -389,10 +389,11 @@ mod utils {
     }
 
     /// 获取消息完整内容(含引用)
-    /// 获取引用内容(格式化为 Markdown)及所有相关图片
+    /// 参数 trigger_name: 触发对话的智能体名称，用于判断 at 是否在智能体名称之后
     pub async fn get_full_content(
         event: &std::sync::Arc<kovi::MsgEvent>,
         bot: &std::sync::Arc<kovi::RuntimeBot>,
+        trigger_name: Option<&str>,
     ) -> (String, Vec<String>) {
         let mut quote_text = String::new();
         let mut imgs = Vec::new();
@@ -415,13 +416,11 @@ mod utils {
                         }
                     }
                     "image" => {
-                        // 引用图片仅添加到图片列表，不再在文本中插入 "[图片]" 标记
                         if let Some(u) = seg.data.get("url").and_then(|v| v.as_str()) {
                             imgs.push(u.to_string());
                         }
                     }
                     "video" => {
-                        // 尝试获取 url 或 file 字段
                         let url = seg
                             .data
                             .get("url")
@@ -435,8 +434,6 @@ mod utils {
                 }
             }
 
-            // 使用 Markdown 引用块 "> "
-            // 且如果 temp_text 为空（纯图片引用），则不添加任何引用文本
             let trimmed = temp_text.trim();
             if !trimmed.is_empty() {
                 for line in trimmed.lines() {
@@ -444,17 +441,22 @@ mod utils {
                     quote_text.push_str(line);
                     quote_text.push('\n');
                 }
-                quote_text.push('\n'); // 引用块与正文的分隔
+                quote_text.push('\n');
             }
         }
 
-        // 2. 提取当前消息中的图片/视频
+        // 2. 提取当前消息中的图片/视频/At头像
+        // 状态标记：是否已经找到了智能体名称
+        let mut found_trigger = false;
+
         for seg in event.message.iter() {
             if seg.type_ == "image"
                 && let Some(u) = seg.data.get("url").and_then(|v| v.as_str())
             {
+                // 普通图片始终添加
                 imgs.push(u.to_string());
             } else if seg.type_ == "video" {
+                // 视频始终添加
                 let url = seg
                     .data
                     .get("url")
@@ -463,13 +465,44 @@ mod utils {
                 if let Some(u) = url {
                     imgs.push(u.to_string());
                 }
+            } else if seg.type_ == "text" {
+                // 检查文本段中是否包含智能体名称
+                if let Some(name) = trigger_name {
+                    if !found_trigger {
+                        let text = seg.data.get("text").and_then(|v| v.as_str()).unwrap_or("");
+                        // 对比前先进行标准化和转小写，以匹配 parser 的逻辑
+                        let norm_text = normalize(text).to_lowercase();
+                        let norm_name = normalize(name).to_lowercase();
+
+                        if norm_text.contains(&norm_name) {
+                            found_trigger = true;
+                        }
+                    }
+                }
+            } else if seg.type_ == "at" {
+                // 只有在找到了智能体名称之后（found_trigger == true），才处理 at
+                if found_trigger {
+                    let qq = seg.data.get("qq").and_then(|v| {
+                        if let Some(s) = v.as_str() {
+                            Some(s.to_string())
+                        } else if v.is_number() {
+                            Some(v.to_string())
+                        } else {
+                            None
+                        }
+                    });
+
+                    if let Some(id) = qq {
+                        if id != "all" {
+                            imgs.push(format!("https://q.qlogo.cn/g?b=qq&nk={}&s=640", id));
+                        }
+                    }
+                }
             }
         }
 
-        // 返回 (引用文本, 所有图片URL)
         (quote_text, imgs)
     }
-
     /// 格式化历史记录
     pub fn format_history(
         hist: &[super::types::ChatMessage],
@@ -2412,7 +2445,7 @@ async fn main() {
             }
 
             if let Some(cmd) = parser::parse_agent_cmd(raw, &agents) {
-                let (quote, imgs) = utils::get_full_content(&event, &bot).await;
+                let (quote, imgs) = utils::get_full_content(&event, &bot, Some(&cmd.agent)).await;
 
                 // 拼接提示词：引用 + 用户输入参数
                 let prompt = if matches!(
