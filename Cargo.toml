@@ -10,6 +10,8 @@ repository = "https://github.com/araea/kovi-plugin-oai"
 keywords = ["kovi", "kovi-plugin", "openai", "chatgpt", "ai-chat"]
 
 [dependencies]
+kovi.workspace = true
+
 kovi = ">= 0.12"
 regex = "1"
 rand = "0.9"
