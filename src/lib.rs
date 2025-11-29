@@ -467,8 +467,8 @@ mod utils {
                 }
             } else if seg.type_ == "text" {
                 // 检查文本段中是否包含智能体名称
-                if let Some(name) = trigger_name {
-                    if !found_trigger {
+                if let Some(name) = trigger_name
+                    && !found_trigger {
                         let text = seg.data.get("text").and_then(|v| v.as_str()).unwrap_or("");
                         // 对比前先进行标准化和转小写，以匹配 parser 的逻辑
                         let norm_text = normalize(text).to_lowercase();
@@ -478,7 +478,6 @@ mod utils {
                             found_trigger = true;
                         }
                     }
-                }
             } else if seg.type_ == "at" {
                 // 只有在找到了智能体名称之后（found_trigger == true），才处理 at
                 if found_trigger {
@@ -492,11 +491,10 @@ mod utils {
                         }
                     });
 
-                    if let Some(id) = qq {
-                        if id != "all" {
+                    if let Some(id) = qq
+                        && id != "all" {
                             imgs.push(format!("https://q.qlogo.cn/g?b=qq&nk={}&s=640", id));
                         }
-                    }
                 }
             }
         }
@@ -700,6 +698,7 @@ mod parser {
         pub indices: Vec<usize>,
         pub private_reply: bool,
         pub text_mode: bool,
+        pub temp_mode: bool,
     }
 
     impl Command {
@@ -711,6 +710,7 @@ mod parser {
                 indices: Vec::new(),
                 private_reply: false,
                 text_mode: false,
+                temp_mode: false,
             }
         }
     }
@@ -818,7 +818,9 @@ mod parser {
         let mut char_idx = 0;
         let mut private_reply = false;
         let mut text_mode = false;
+        let mut temp_mode = false;
 
+        // 1. 前缀解析
         while char_idx < chars.len() {
             match chars[char_idx] {
                 '&' => {
@@ -829,6 +831,10 @@ mod parser {
                     text_mode = true;
                     char_idx += 1;
                 }
+                '~' => {
+                    temp_mode = true;
+                    char_idx += 1;
+                }
                 _ => break,
             }
         }
@@ -836,9 +842,11 @@ mod parser {
         let byte_idx: usize = chars.iter().take(char_idx).map(|c| c.len_utf8()).sum();
         let content = &norm[byte_idx..];
 
+        // 2. 智能体名称匹配 (按长度降序，解决包含关系问题)
         let mut agent_name = String::new();
         let mut match_char_len = 0;
         let mut sorted = agents.to_vec();
+        // 关键：必须按长度倒序，确保 "小帅2" 先于 "小帅" 被匹配
         sorted.sort_by_key(|b| std::cmp::Reverse(b.chars().count()));
 
         for name in &sorted {
@@ -855,6 +863,7 @@ mod parser {
             return None;
         }
 
+        // 3. 后缀提取
         let match_byte_len: usize = content
             .chars()
             .take(match_char_len)
@@ -862,6 +871,7 @@ mod parser {
             .sum();
         let suffix = content[match_byte_len..].trim();
 
+        // 计算原始字符串中的后缀部分（为了保留参数的原始格式，如大小写）
         let raw_suffix = {
             let prefix_bytes: usize = raw.chars().take(char_idx).map(|c| c.len_utf8()).sum();
             let agent_bytes: usize = raw[prefix_bytes..]
@@ -881,25 +891,60 @@ mod parser {
             indices,
             private_reply,
             text_mode,
+            temp_mode,
         })
     }
 
     fn parse_suffix(norm: &str, raw: &str, has_priv_prefix: bool) -> (Action, String, Vec<usize>) {
-        let s = norm.trim();
-        let r = raw.trim();
+        let s = norm.trim(); // 此时 s 里的全角符号已被 normalize 转为半角
+        let r = raw.trim(); // r 是原始字符串
 
+        // 1. 空指令 -> 聊天
         if s.is_empty() {
             return (Action::Chat, r.to_string(), vec![]);
         }
 
-        if (s == "~" || s == "～")
-            || ((s.starts_with('~') || s.starts_with('～'))
-                && !s.starts_with("~#")
-                && !s.starts_with("~$")
-                && !s.starts_with("～#")
-                && !s.starts_with("～$"))
-        {
-            let skip_len = if s.starts_with('～') {
+        // 2. 停止指令 (!)
+        if s == "!" {
+            return (Action::Stop, String::new(), vec![]);
+        }
+
+        // 3. 复制指令 (~#) - 必须在普通 ~ 之前判断
+        // 注意：normalize 已经把 ～ 转为 ~，把 ＃ 转为 #
+        if s.starts_with("~#") {
+            // 计算原始字符串中需要跳过的长度
+            let skip_len = if r.starts_with("～＃") {
+                "～＃".len()
+            } else if r.starts_with("～#") {
+                "～#".len()
+            } else if r.starts_with("~＃") {
+                "~＃".len()
+            } else {
+                "~#".len()
+            };
+            let arg = r.get(skip_len..).unwrap_or("").trim();
+            return (Action::Copy, arg.to_string(), vec![]);
+        }
+
+        // 4. 重命名指令 (~=) - 必须在普通 ~ 之前判断
+        if s.starts_with("~=") {
+            let skip_len = if r.starts_with("～＝") {
+                "～＝".len()
+            } else if r.starts_with("～=") {
+                "～=".len()
+            } else if r.starts_with("~＝") {
+                "~＝".len()
+            } else {
+                "~=".len()
+            };
+            let arg = r.get(skip_len..).unwrap_or("").trim();
+            return (Action::Rename, arg.to_string(), vec![]);
+        }
+
+        // 5. 重新生成指令 (~) - 放在最后判断
+        // 匹配 "~" 单独出现，或者 "~内容"
+        if s.starts_with('~') {
+            let skip_len = if r.starts_with('～') {
                 '～'.len_utf8()
             } else {
                 '~'.len_utf8()
@@ -908,34 +953,8 @@ mod parser {
             return (Action::Regenerate, arg.to_string(), vec![]);
         }
 
-        if s == "!" {
-            return (Action::Stop, String::new(), vec![]);
-        }
-
-        if s.starts_with("~#") || s.starts_with("~＃") {
-            let skip_len = if r.starts_with("~＃") {
-                "～＃".chars().map(|c| c.len_utf8()).sum()
-            } else {
-                "~#".chars().map(|c| c.len_utf8()).sum()
-            };
-            let arg = r.get(skip_len..).unwrap_or("").trim();
-            return (Action::Copy, arg.to_string(), vec![]);
-        }
-
-        if s.starts_with("~=") || s.starts_with("~＝") {
-            let skip_len = if r.starts_with("~＝") {
-                "~＝".chars().map(|c| c.len_utf8()).sum()
-            } else {
-                "~=".chars().map(|c| c.len_utf8()).sum()
-            };
-            let arg = r.get(skip_len..).unwrap_or("").trim();
-            return (Action::Rename, arg.to_string(), vec![]);
-        }
-
-        if (s.starts_with(':') || s.starts_with('：'))
-            && !s.starts_with(":/")
-            && !s.starts_with("：/")
-        {
+        // 6. 设置描述 (:)
+        if s.starts_with(':') && !s.starts_with(":/") {
             let skip_len = if r.starts_with('：') {
                 '：'.len_utf8()
             } else {
@@ -945,20 +964,23 @@ mod parser {
             return (Action::SetDesc, arg.to_string(), vec![]);
         }
 
+        // 7. 设置模型 (%)
         if s.starts_with('%') {
             let arg = r.get(1..).unwrap_or("").trim();
             return (Action::SetModel, arg.to_string(), vec![]);
         }
 
-        if s.starts_with('$') && s != "/$" {
+        // 8. 设置/查看提示词 ($)
+        if s == "/$" {
+            return (Action::ViewPrompt, String::new(), vec![]);
+        }
+        if s.starts_with('$') {
             let arg = r.get(1..).unwrap_or("").trim();
             return (Action::SetPrompt, arg.to_string(), vec![]);
         }
 
-        if s == "/$" {
-            return (Action::ViewPrompt, String::new(), vec![]);
-        }
-
+        // 9. 历史/查看/编辑/删除类操作
+        // 处理 & 后缀 (局部私有操作，如 智能体&/*)
         let (has_local_priv, clean, clean_raw) = if let Some(stripped) = s.strip_prefix('&') {
             (true, stripped, r.strip_prefix('&').unwrap_or("").trim())
         } else {
@@ -987,7 +1009,9 @@ mod parser {
             return (Action::Export(scope), String::new(), vec![]);
         }
 
+        // 编辑指令 ('): 支持 '1 新内容
         if clean.starts_with('\'') {
+            // splitn(2) 确保只分割出索引和内容两部分
             let parts: Vec<&str> = clean_raw.get(1..).unwrap_or("").splitn(2, ' ').collect();
             if !parts.is_empty() {
                 let indices = super::utils::parse_indices(parts[0]);
@@ -1008,6 +1032,7 @@ mod parser {
             }
         }
 
+        // 默认 fallback: 视为普通聊天内容
         (Action::Chat, r.to_string(), vec![])
     }
 }
@@ -1213,8 +1238,10 @@ mod logic {
         async fn inner(ctx: ChatContext<'_>) {
             let is_priv_ctx = ctx.cmd.private_reply;
             let uid = ctx.event.user_id.to_string();
+            let temp_mode = ctx.cmd.temp_mode;
 
-            {
+            // 如果是临时模式，跳过"正在生成"检查，不阻塞
+            if !temp_mode {
                 let generating = ctx.mgr.generating.read().await;
                 if generating.is_generating(ctx.name, is_priv_ctx, &uid) {
                     reply_text(ctx.event, "⏳ 正在生成中，请等待或使用 智能体! 停止");
@@ -1246,15 +1273,18 @@ mod logic {
                 .set_msg_emoji_like(ctx.event.message_id.into(), "124")
                 .await
             {
-                Ok(_) => {
-                    // kovi::log::info!("点赞成功");
-                }
+                Ok(_) => {}
                 Err(e) => {
                     kovi::log::error!("点赞失败: {:?}", e);
                 }
             }
 
-            let mut hist = agent.history(is_priv_ctx, &uid).to_vec();
+            // 临时模式下不加载历史，创建一个空历史用于本次构建消息
+            let mut hist = if temp_mode {
+                Vec::new()
+            } else {
+                agent.history(is_priv_ctx, &uid).to_vec()
+            };
 
             if ctx.regen {
                 if hist.last().map(|m| m.role == "assistant").unwrap_or(false) {
@@ -1274,7 +1304,10 @@ mod logic {
                 hist.push(ChatMessage::new("user", ctx.prompt, ctx.imgs.clone()));
             }
 
-            let gen_id = {
+            // 临时模式不保存历史，也不更新 generation_id
+            let gen_id = if temp_mode {
+                0 // 临时 ID
+            } else {
                 let mut c = ctx.mgr.config.write().await;
                 if let Some(a) = c.agents.iter_mut().find(|a| a.name == ctx.name) {
                     *a.history_mut(is_priv_ctx, &uid) = hist.clone();
@@ -1287,7 +1320,8 @@ mod logic {
                 }
             };
 
-            {
+            // 临时模式不设置生成锁，避免阻塞主对话
+            if !temp_mode {
                 let mut generating = ctx.mgr.generating.write().await;
                 generating.set_generating(ctx.name, is_priv_ctx, &uid, true);
             }
@@ -1379,8 +1413,10 @@ mod logic {
             {
                 Ok(r) => r,
                 Err(e) => {
-                    let mut generating = ctx.mgr.generating.write().await;
-                    generating.set_generating(ctx.name, is_priv_ctx, &uid, false);
+                    if !temp_mode {
+                        let mut generating = ctx.mgr.generating.write().await;
+                        generating.set_generating(ctx.name, is_priv_ctx, &uid, false);
+                    }
                     reply_text(ctx.event, format!("❌ 请求构建失败: {}", e));
                     return;
                 }
@@ -1392,9 +1428,9 @@ mod logic {
             )
             .await
             {
-                // 情况 1: 触发超时 (超过 5 分钟)
+                // 超时
                 Err(_) => {
-                    {
+                    if !temp_mode {
                         let mut generating = ctx.mgr.generating.write().await;
                         generating.set_generating(ctx.name, is_priv_ctx, &uid, false);
                     }
@@ -1403,15 +1439,16 @@ mod logic {
                         "⏳ 请求超时：模型响应时间超过 5 分钟，已强制停止。",
                     );
                 }
-                // 情况 2: 请求在限时内完成 (包含 成功响应 或 API报错)
+                // 完成
                 Ok(result) => match result {
                     Ok(res) => {
-                        {
+                        if !temp_mode {
                             let mut generating = ctx.mgr.generating.write().await;
                             generating.set_generating(ctx.name, is_priv_ctx, &uid, false);
                         }
 
-                        {
+                        // 非临时模式下检查 ID 是否变更（是否被手动停止）
+                        if !temp_mode {
                             let c = ctx.mgr.config.read().await;
                             if let Some(a) = c.agents.iter().find(|a| a.name == ctx.name)
                                 && a.generation_id != gen_id
@@ -1423,7 +1460,9 @@ mod logic {
                         if let Some(choice) = res.choices.first()
                             && let Some(content) = &choice.message.content
                         {
-                            let msg_index = {
+                            let msg_index = if temp_mode {
+                                0
+                            } else {
                                 let c = ctx.mgr.config.read().await;
                                 if let Some(a) = c.agents.iter().find(|a| a.name == ctx.name) {
                                     a.history(is_priv_ctx, &uid).len() + 1
@@ -1432,7 +1471,8 @@ mod logic {
                                 }
                             };
 
-                            {
+                            // 临时模式不保存回复到历史
+                            if !temp_mode {
                                 let mut c = ctx.mgr.config.write().await;
                                 if let Some(a) = c.agents.iter_mut().find(|a| a.name == ctx.name) {
                                     a.history_mut(is_priv_ctx, &uid).push(ChatMessage::new(
@@ -1446,16 +1486,20 @@ mod logic {
 
                             let image_urls = extract_image_urls(content);
 
-                            let header = format!(
-                                "{} #{}回复{}",
-                                agent.name,
-                                msg_index,
-                                if ctx.cmd.private_reply {
-                                    " (私有)"
-                                } else {
-                                    ""
-                                }
-                            );
+                            let header = if temp_mode {
+                                format!("{} (临时会话)", agent.name)
+                            } else {
+                                format!(
+                                    "{} #{}回复{}",
+                                    agent.name,
+                                    msg_index,
+                                    if ctx.cmd.private_reply {
+                                        " (私有)"
+                                    } else {
+                                        ""
+                                    }
+                                )
+                            };
 
                             let display_content = if !image_urls.is_empty() && !ctx.cmd.text_mode {
                                 let urls_text = image_urls
@@ -2175,8 +2219,9 @@ mod logic {
                 let help = r#"## 模式前缀（可组合）
 | 符号 | 含义 |
 |:---:|------|
-| `&` | 私有模式 |
-| `"` | 文本模式 |
+| `&` | 私有模式 (独立历史) |
+| `"` | 文本模式 (不转图片) |
+| `~` | 临时模式 (无历史/不阻塞) |
 
 ## 智能体管理
 | 指令 | 功能 | 示例 |
@@ -2201,10 +2246,11 @@ mod logic {
 ## 对话控制
 | 指令 | 功能 |
 |------|------|
-| `智能体 内容` | 对话 |
-| `"智能体 内容` | 文本模式对话 |
-| `&智能体 内容` | 私有对话 |
-| `智能体~` | 重新生成 |
+| `智能体 内容` | 正常对话 |
+| `~智能体 内容` | 临时对话 (一次性) |
+| `"智能体 内容` | 文本回复对话 |
+| `&智能体 内容` | 私有历史对话 |
+| `智能体~` | 重新生成上一条 |
 | `智能体!` | 停止生成 |
 
 ## 历史管理
@@ -2212,25 +2258,25 @@ mod logic {
 |------|------|
 | `智能体/*` | 查看所有 |
 | `智能体/1` | 查看第1条 |
-| `智能体/1-5` | 查看1-5条 |
+| `智能体/1-5` | 查看范围 |
 | `智能体_*` | 导出(.txt) |
-| `智能体'1 新内容` | 编辑第1条 |
+| `智能体'1 内容` | 编辑第1条 |
 | `智能体-1` | 删除第1条 |
-| `智能体-1,3,5` | 删除多条 |
-| `智能体-1-5` | 删除范围 |
+| `智能体-1,3` | 删除多条 |
 | `智能体-*` | 清空历史 |
 
-> 加 `&` 前缀操作私有历史: `&智能体/*`
+> 所有符号支持半角/全角兼容 (如 ～, ＃, ＝)
+> 加 `&` 前缀可操作私有历史: `&智能体/*`
 
 ## 危险操作
 | 指令 | 功能 |
 |------|------|
 | `-*` | 清空所有智能体公有历史 |
-| `-*!` | 清空所有历史 |
+| `-*!` | 清空数据库所有历史 |
 
 ## API 配置
 直接发送: `API地址 API密钥`
-    "#;
+"#;
                 reply(event, help, cmd.text_mode, "🤖 OAI 符号指令帮助").await;
             }
 
