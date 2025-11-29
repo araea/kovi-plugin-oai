@@ -2495,11 +2495,6 @@ async fn main() {
                 return;
             }
 
-            if let Some((name, desc, model, prompt)) = parser::parse_create(raw) {
-                logic::handle_create(&name, &desc, &model, &prompt, &event, &mgr).await;
-                return;
-            }
-
             let agents = mgr.agent_names().await;
             if let Some(name) = parser::parse_delete_agent(raw, &agents) {
                 let cmd = parser::Command::new(&name, parser::Action::Delete);
