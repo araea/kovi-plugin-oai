@@ -10,7 +10,7 @@ repository = "https://github.com/araea/kovi-plugin-oai"
 keywords = ["kovi", "kovi-plugin", "openai", "chatgpt", "ai-chat"]
 
 [dependencies]
-kovi.workspace = true
+# kovi.workspace = true
 
 kovi = ">= 0.12"
 regex = "1"
@@ -22,8 +22,8 @@ cdp-html-shot = "0.2"
 async-openai = "0.30"
 pulldown-cmark = "0.13"
 kovi-plugin-expand-napcat = "0.4"
-serde = { version = "1.0", features = ["derive"] }
 tokio = { version = "1", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
 chrono = { version = "0.4", features = ["serde"] }
 reqwest = { version = "0.12", features = ["json"] }
 
