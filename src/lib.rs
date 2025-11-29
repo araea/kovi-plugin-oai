@@ -468,16 +468,17 @@ mod utils {
             } else if seg.type_ == "text" {
                 // 检查文本段中是否包含智能体名称
                 if let Some(name) = trigger_name
-                    && !found_trigger {
-                        let text = seg.data.get("text").and_then(|v| v.as_str()).unwrap_or("");
-                        // 对比前先进行标准化和转小写，以匹配 parser 的逻辑
-                        let norm_text = normalize(text).to_lowercase();
-                        let norm_name = normalize(name).to_lowercase();
+                    && !found_trigger
+                {
+                    let text = seg.data.get("text").and_then(|v| v.as_str()).unwrap_or("");
+                    // 对比前先进行标准化和转小写，以匹配 parser 的逻辑
+                    let norm_text = normalize(text).to_lowercase();
+                    let norm_name = normalize(name).to_lowercase();
 
-                        if norm_text.contains(&norm_name) {
-                            found_trigger = true;
-                        }
+                    if norm_text.contains(&norm_name) {
+                        found_trigger = true;
                     }
+                }
             } else if seg.type_ == "at" {
                 // 只有在找到了智能体名称之后（found_trigger == true），才处理 at
                 if found_trigger {
@@ -492,9 +493,10 @@ mod utils {
                     });
 
                     if let Some(id) = qq
-                        && id != "all" {
-                            imgs.push(format!("https://q.qlogo.cn/g?b=qq&nk={}&s=640", id));
-                        }
+                        && id != "all"
+                    {
+                        imgs.push(format!("https://q.qlogo.cn/g?b=qq&nk={}&s=640", id));
+                    }
                 }
             }
         }
@@ -688,6 +690,7 @@ mod parser {
         ClearEverything,
         Help,
         AutoFillDescriptions(String),
+        UpdateApi(String, String),
     }
 
     #[derive(Debug, Clone)]
@@ -718,8 +721,14 @@ mod parser {
     pub fn parse_global(raw: &str) -> Option<Command> {
         let norm = normalize(raw.trim());
 
-        if norm == "oai" {
-            return Some(Command::new("", Action::Help));
+        if norm.starts_with("oai") {
+            let rest = norm.get(3..).unwrap_or("").trim();
+            if rest.is_empty() {
+                return Some(Command::new("", Action::Help));
+            }
+            if let Some((u, k)) = super::utils::parse_api(rest) {
+                return Some(Command::new("", Action::UpdateApi(u, k)));
+            }
         }
 
         if norm == "/#" {
@@ -1604,6 +1613,24 @@ mod logic {
         let uid = event.user_id.to_string();
 
         match cmd.action {
+            Action::UpdateApi(url, key) => {
+                let mut c = mgr.config.write().await;
+                c.api_base = url.clone();
+                c.api_key = key;
+                mgr.save(&c);
+                drop(c);
+
+                reply_text(event, format!("✅ API 已配置: {}", url));
+
+                match mgr.fetch_models().await {
+                    Ok(models) => reply_text(
+                        event,
+                        format!("📋 验证成功，已获取 {} 个模型", models.len()),
+                    ),
+                    Err(e) => reply_text(event, format!("⚠️ 获取模型失败: {}", e)),
+                }
+            }
+
             Action::Chat => {
                 chat(name, &prompt, imgs, false, &cmd, event, mgr, bot).await;
             }
@@ -2275,7 +2302,7 @@ mod logic {
 | `-*!` | 清空数据库所有历史 |
 
 ## API 配置
-直接发送: `API地址 API密钥`
+更新指令: `oai API地址 API密钥`
 "#;
                 reply(event, help, cmd.text_mode, "🤖 OAI 符号指令帮助").await;
             }
@@ -2434,7 +2461,6 @@ mod logic {
 }
 
 // --- 入口 ---
-use crate::logic::reply_text;
 use cdp_html_shot::Browser;
 use kovi::PluginBuilder;
 use std::sync::Arc;
@@ -2459,22 +2485,13 @@ async fn main() {
                 None => return,
             };
 
-            if let Some((url, key)) = utils::parse_api(raw) {
-                let mut c = mgr.config.write().await;
-                c.api_base = url.clone();
-                c.api_key = key;
-                mgr.save(&c);
-                drop(c);
-                reply_text(&event, format!("✅ API 已配置: {}", url));
-                match mgr.fetch_models().await {
-                    Ok(models) => reply_text(&event, format!("📋 已获取 {} 个模型", models.len())),
-                    Err(e) => reply_text(&event, format!("⚠️ 获取模型失败: {}", e)),
-                }
+            if let Some(cmd) = parser::parse_global(raw) {
+                logic::execute(cmd, String::new(), vec![], &event, &mgr, &bot).await;
                 return;
             }
 
-            if let Some(cmd) = parser::parse_global(raw) {
-                logic::execute(cmd, String::new(), vec![], &event, &mgr, &bot).await;
+            if let Some((name, desc, model, prompt)) = parser::parse_create(raw) {
+                logic::handle_create(&name, &desc, &model, &prompt, &event, &mgr).await;
                 return;
             }
 
